@@ -143,6 +143,22 @@ while IFS= read -r -d '' file; do
     echo ""
 done < <(find . -name "Skip.env" -not -path "./.git/*" -not -path "*/.build/*" -print0)
 
+# Clean up backup files
+echo ""
+echo -e "${BLUE}🧹 Cleaning up backup files...${NC}"
+backup_count=0
+while IFS= read -r -d '' file; do
+    echo -e "   🗑️  Removing: $file"
+    rm "$file"
+    ((backup_count++))
+done < <(find . -name "*.backup.*" -not -path "./.git/*" -not -path "*/.build/*" -print0)
+
+if [[ $backup_count -gt 0 ]]; then
+    echo -e "${GREEN}✅ Removed $backup_count backup files${NC}"
+else
+    echo -e "${YELLOW}ℹ️  No backup files found to remove${NC}"
+fi
+
 echo -e "${BLUE}=====================================${NC}"
 echo -e "${GREEN}✅ Sanitization Complete!${NC}"
 echo -e "${GREEN}📊 Processed $processed_count files${NC}"

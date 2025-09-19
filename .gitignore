@@ -564,3 +564,6 @@ xcodebuild*.log
 !**/fastlane/metadata/
 .fseventsd
 .Spotlight-V100
+
+# Backup files created during sanitization
+*.backup.*
