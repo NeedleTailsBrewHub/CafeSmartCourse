@@ -1,0 +1,68 @@
+//
+//  OrderController.swift
+//  CafeSmartAPI
+//
+//  Created by NeedleTails on 8/8/25.
+//
+//  Copyright (c) 2025 NeedleTails Organization.
+//
+//  This project is licensed under the MIT License.
+//
+//  See the LICENSE file for more information.
+//
+//  This file is part of the CafeSmartAPI Project
+
+@preconcurrency import BSON
+import MongoKitten
+import Vapor
+
+actor OrderController {
+    private let collection = "orders"
+    
+    func list(req: Request) async throws -> OrdersWrapper {
+        let items = try await req.store.listOrders()
+        return OrdersWrapper(items: items)
+    }
+    
+    func create(req: Request) async throws -> Order {
+        let create = try req.content.decode(OrderCreateRequest.self)
+        guard !create.items.isEmpty else {
+            throw Abort(.badRequest, reason: "Order requires at least one item")
+        }
+        let now = Date()
+        let model = Order(
+            id: ObjectId().hexString, status: .pending, customerName: create.customerName,
+            items: create.items, pickupTime: create.pickupTime, createdAt: now)
+        return try await req.store.create(order: model)
+    }
+    
+    func get(req: Request) async throws -> Order {
+        guard let id = req.parameters.get("id") else {
+            throw Abort(.badRequest)
+        }
+        guard let order = try await req.store.findOrder(by: id) else {
+            throw Abort(.notFound)
+        }
+        return order
+    }
+    
+    func updateStatus(req: Request) async throws -> Order {
+        let body = try req.content.decode(OrderStatusUpdateRequest.self)
+        guard let id = req.parameters.get("id") else {
+            throw Abort(.badRequest)
+        }
+        guard var order = try await req.store.findOrder(by: id) else {
+            throw Abort(.notFound)
+        }
+        order.status = body.status
+        return try await req.store.update(order: order)
+    }
+    
+    func delete(req: Request) async throws -> HTTPStatus {
+        guard let id = req.parameters.get("id") else {
+            throw Abort(.badRequest)
+        }
+        try await req.store.deleteOrder(id: id)
+        return .noContent
+    }
+}

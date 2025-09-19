@@ -1,0 +1,27 @@
+{
+    "version": "0.1.0",
+    "bundleIdentifier": "com.cafesmart.ml.tutorial",
+    "bundleName": "CafeSmart ML Tutorial",
+    "bundleDisplayName": "CafeSmart ML",
+    "bundleVersion": "1.0.0",
+    "defaultCodeListingLanguage": "swift",
+    "defaultAvailability": {
+        "platforms": [
+            "iOS 15.0",
+            "macOS 12.0"
+        ]
+    },
+    "landingPage": "Documentation.md",
+    "tutorials": [
+        "Tutorials/CafeSmartMLTutorial.md"
+    ],
+    "documentation": [
+        "Documentation.md",
+        "MLPredictions.md",
+        "CoreMLIntegration.md"
+    ],
+    "themeSettings": {
+        "primaryColor": "#007AFF",
+        "secondaryColor": "#5856D6"
+    }
+}
