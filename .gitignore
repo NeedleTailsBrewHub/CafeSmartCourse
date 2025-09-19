@@ -1,0 +1,566 @@
+# Xcode
+#
+# gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
+
+## User settings
+xcuserdata/
+
+## compatibility with Xcode 8 and earlier (ignoring not required starting Xcode 9)
+*.xcscmblueprint
+*.xccheckout
+
+## compatibility with Xcode 3 and earlier (ignoring not required starting Xcode 4)
+build/
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+
+## Obj-C/Swift specific
+*.hmap
+
+## App packaging
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+#
+# Add this line if you want to avoid checking in source code from Swift Package Manager dependencies.
+Packages/
+Package.pins
+Package.resolved
+# *.xcodeproj
+#
+# Xcode automatically generates this directory with a .xcworkspacedata file and xcuserdata
+# hence it is not needed unless you have added a package configuration file to your project
+.swiftpm/
+.swiftpm/
+
+# Swift Package Manager build artifacts
+.build/
+
+# Swift Package Manager additional patterns
+.swiftpm/xcode/package.xcworkspace
+.swiftpm/xcode/workspace-state.xcworkspacedata
+
+# CocoaPods
+#
+# We recommend against adding the Pods directory to your .gitignore. However
+# you should judge for yourself, the pros and cons are mentioned at:
+# https://guides.cocoapods.org/using/using-cocoapods.html#should-i-check-the-pods-directory-into-source-control
+#
+# Pods/
+#
+# Add this line if you want to avoid checking in source code from the Xcode workspace
+# *.xcworkspace
+
+# Carthage
+#
+# Add this line if you want to avoid checking in source code from Carthage dependencies.
+# Carthage/Checkouts
+
+Carthage/Build/
+
+# Accio dependency management
+Dependencies/
+.accio/
+
+# fastlane
+#
+# It is recommended to not store the screenshots in the git repo.
+# Instead, use fastlane to re-generate the screenshots whenever they are needed.
+# For more information about the recommended setup visit:
+# https://docs.fastlane.tools/best-practices/source-control/
+
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Code Injection
+#
+# After new code Injection tools there's a generated folder /iOSInjectionProject
+# https://github.com/johnno1962/injectionforxcode
+
+iOSInjectionProject/
+
+# Android
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# Android NDK
+obj/
+
+# IntelliJ IDEA
+.idea/
+*.iws
+/out/
+
+# User-specific configurations
+.idea/libraries/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/.name
+.idea/compiler.xml
+.idea/copyright/profiles_settings.xml
+.idea/encodings.xml
+.idea/misc.xml
+.idea/modules.xml
+.idea/scopes/scope_settings.xml
+.idea/vcs.xml
+.idea/jsLibraryMappings.xml
+.idea/datasources.xml
+.idea/dataSources.ids
+.idea/sqlDataSources.xml
+.idea/dynamic.xml
+.idea/uiDesigner.xml
+
+# Signing files
+*.jks
+*.keystore
+keystore.properties
+
+# Specific Android keystore paths
+Android/app/keystore.jks
+Android/app/keystore.properties
+
+# External native build folder generated in Android Studio 2.2 and later
+.externalNativeBuild
+
+# Google Services (e.g. APIs or Firebase)
+google-services.json
+
+# Freeline
+freeline.py
+freeline/
+freeline_project_description.json
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# Bundle artifacts
+*.jsbundle
+
+# CocoaPods
+/ios/Pods/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# React Native
+# OSX
+.DS_Store
+
+# Xcode
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+project.xcworkspace
+
+# Android/IntelliJ
+build/
+.idea
+.gradle
+local.properties
+*.iml
+*.hprof
+.cxx/
+
+# Bundle artifacts
+*.jsbundle
+
+# CocoaPods
+/ios/Pods/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
+.grunt
+
+# Bower dependency directory (https://bower.io/)
+bower_components
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons (https://nodejs.org/api/addons.html)
+build/Release
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript v1 declaration files
+typings/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Gatsby files
+.cache/
+public
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# Temporary folders
+tmp/
+temp/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Skip framework specific files
+Skip.env
+.skip/
+.skip/
+
+# Skip-specific patterns from existing projects
+default.profraw
+*.mobileprovision
+*.cer
+*.der
+*.xcarchive
+*.apk
+*.aab
+
+# Core ML compiled artifacts
+*.mlmodelc/
+
+# Project data/models (if they contain large files)
+/Models/
+
+# Exported data patterns
+CafeEvents_*.ndjson
+CafeEvents_*.csv
+test_export.csv
+
+# Fleet editor
+.fleet/
+.history/
+
+# Additional Android patterns
+.android/
+.kotlin/
+
+# Additional Xcode patterns
+*.xcarchive
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.pbxuser
+!default.pbxuser
+
+# Additional editor patterns
+*.orig
+*.rej
+*.swp
+*.swo
+.Trash-
+
+# Coverage files
+*.profdata
+*.profraw
+.coverage/
+coverage/
+.index-store/
+
+# Machine Learning models (if they're large)
+*.mlmodel
+*.mlpackage
+
+# Test artifacts
+test_export.csv
+*.csv
+
+# Documentation build artifacts
+docs/_build/
+site/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Certificate files
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# API keys and secrets
+secrets.json
+config.json
+api-keys.json
+
+# Lock files
+*.lock
+.lock-wscript
+
+# Additional temporary files
+*.tmp
+*.temp
+*.cache
+
+# Additional certificate patterns
+*.cert
+*.certificate
+
+# Additional Android patterns
+*.aar
+*.dex
+
+# Additional iOS patterns
+*.app
+*.framework
+*.xcframework
+
+# Additional build patterns
+*.o
+*.a
+*.so
+*.dylib
+
+# Additional IDE patterns
+*.sublime-*
+*.code-workspace
+
+# Additional system patterns
+.fuse_hidden*
+.nfs*
+
+# Additional patterns from individual project .gitignore files
+xcodebuild*.log
+**/fastlane/apikey.json
+**/fastlane/README.md
+**/fastlane/*
+!**/fastlane/metadata/
+.fseventsd
+.Spotlight-V100
