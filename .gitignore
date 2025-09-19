@@ -435,7 +435,11 @@ default.profraw
 *.mlmodelc/
 
 # Project data/models (if they contain large files)
-/Models/
+# Core ML models and generated files (not Swift source Models)
+**/Models/coreml/
+**/Models/*.mlmodel
+**/Models/*.mlmodelc
+**/Models/.tmp-*
 
 # Exported data patterns
 CafeEvents_*.ndjson
