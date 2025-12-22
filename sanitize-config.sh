@@ -49,27 +49,19 @@ sanitize_skip_env() {
 }
 
 # Function to sanitize Xcode project file
-# CRITICAL: Must use the SAME bundle ID as Skip.env
+# NOTE: For Skip projects, we SKIP .pbxproj files entirely because:
+# 1. Bundle identifiers come from Skip.env (already sanitized)
+# 2. .pbxproj files have complex structure that's easy to break
+# 3. Package references and product dependencies are fragile
+# 4. Xcode will use Skip.env values automatically
 sanitize_pbxproj() {
     local file="$1"
-    local backup_file="${file}.backup.$(date +%Y%m%d_%H%M%S)"
     
     if [[ -f "$file" ]]; then
-        echo -e "${YELLOW}📝 Processing Xcode project: $file${NC}"
-        
-        # Create backup
-        cp "$file" "$backup_file"
-        echo -e "   💾 Backup created: $backup_file"
-        
-        # Remove development team (safe to clear)
-        # Sanitize bundle identifier to match Skip.env
-        sed -i '' \
-            -e "s|DEVELOPMENT_TEAM = [^;]*|DEVELOPMENT_TEAM = |g" \
-            -e "s|PRODUCT_BUNDLE_IDENTIFIER = [^;]*|PRODUCT_BUNDLE_IDENTIFIER = ${GENERIC_BUNDLE_ID}|g" \
-            -e "s|CFBundleIdentifier = [^;]*|CFBundleIdentifier = ${GENERIC_BUNDLE_ID}|g" \
-            "$file"
-        
-        echo -e "   ✅ Sanitized bundle identifier and removed development team"
+        echo -e "${YELLOW}📝 Skipping Xcode project file: $file${NC}"
+        echo -e "   ℹ️  Skip projects get bundle ID from Skip.env (already sanitized)"
+        echo -e "   ℹ️  Modifying .pbxproj can break package references"
+        echo -e "   ✅ No changes needed - Xcode will use Skip.env values"
         return 0
     else
         echo -e "   ⚠️  File not found: $file"
