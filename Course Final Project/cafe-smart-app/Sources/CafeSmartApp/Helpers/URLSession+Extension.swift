@@ -56,19 +56,19 @@ extension URLSession {
         private let keychain = Keychain.shared
        
         func getAccessToken() -> String? {
-            try? keychain.string(forKey: "com.needletails.CafeSmart.access-token")
+            try? keychain.string(forKey: "com.example.app.access-token")
         }
 
         func getRefreshToken() -> String? {
-            try? keychain.string(forKey: "com.needletails.CafeSmart.refresh-token")
+            try? keychain.string(forKey: "com.example.app.refresh-token")
         }
 
         func setAccessToken(_ token: String) {
-            try? keychain.set(token, forKey: "com.needletails.CafeSmart.access-token")
+            try? keychain.set(token, forKey: "com.example.app.access-token")
         }
 
         func setRefreshToken(_ token: String) {
-            try? keychain.set(token, forKey: "com.needletails.CafeSmart.refresh-token")
+            try? keychain.set(token, forKey: "com.example.app.refresh-token")
         }
     }
 

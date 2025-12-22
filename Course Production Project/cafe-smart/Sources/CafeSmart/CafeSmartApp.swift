@@ -22,7 +22,7 @@ import ConnectionManagerKit
 import BSON
 
 /// A logger for the CafeSmart module.
-let logger: Logger = Logger(subsystem: "com.needletails.cafesmart", category: "CafeSmart")
+let logger: Logger = Logger(subsystem: "com.example.app", category: "CafeSmart")
 
 /// The shared top-level view for the app, loaded from the platform-specific App delegates below.
 ///

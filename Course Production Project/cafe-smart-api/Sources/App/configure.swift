@@ -48,7 +48,7 @@ public func configure(_ app: Application) async throws {
       supportVersions: Set<HTTPVersionMajor>([.one, .two]),
       tlsConfiguration: configuration,
       serverName: "CafeSmartAPI",
-      logger: Logger(label: "[ com.needletails.cafesmart.api ]"))
+      logger: Logger(label: "[ com.example.app.api ]"))
 
   case .development:
 
@@ -60,7 +60,7 @@ public func configure(_ app: Application) async throws {
       supportVersions: Set<HTTPVersionMajor>([.one]),
       tlsConfiguration: .none,
       serverName: "CafeSmartAPI",
-      logger: Logger(label: "[ com.needletails.cafesmart.api ]"))
+      logger: Logger(label: "[ com.example.app.api ]"))
   default:
     break
   }

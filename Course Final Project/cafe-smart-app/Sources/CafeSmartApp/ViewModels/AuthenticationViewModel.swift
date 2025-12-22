@@ -93,9 +93,9 @@ final class AuthenticationViewModel {
         }
         
         user = token.user
-        try keychain.set(token.token, forKey: "com.needletails.CafeSmart.access-token")
+        try keychain.set(token.token, forKey: "com.example.app.access-token")
         if let refreshToken = token.refreshToken {
-            try keychain.set(refreshToken, forKey: "com.needletails.CafeSmart.refresh-token")
+            try keychain.set(refreshToken, forKey: "com.example.app.refresh-token")
         }
         self.didSignIn = true
         
@@ -132,8 +132,8 @@ final class AuthenticationViewModel {
     }
 
     func signOut() {
-        try? keychain.removeValue(forKey: "com.needletails.CafeSmart.access-token")
-        try? keychain.removeValue(forKey: "com.needletails.CafeSmart.refresh-token")
+        try? keychain.removeValue(forKey: "com.example.app.access-token")
+        try? keychain.removeValue(forKey: "com.example.app.refresh-token")
         user = nil
         didSignIn = false
     }
@@ -160,9 +160,9 @@ final class AuthenticationViewModel {
             throw Errors.invalidData
         }
         self.user = token.user
-        try keychain.set(token.token, forKey: "com.needletails.CafeSmart.access-token")
+        try keychain.set(token.token, forKey: "com.example.app.access-token")
         if let refreshToken = token.refreshToken {
-            try keychain.set(refreshToken, forKey: "com.needletails.CafeSmart.refresh-token")
+            try keychain.set(refreshToken, forKey: "com.example.app.refresh-token")
         }
         self.didSignIn = true
     }
