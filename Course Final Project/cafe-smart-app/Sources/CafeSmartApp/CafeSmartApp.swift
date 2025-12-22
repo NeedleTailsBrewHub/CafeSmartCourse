@@ -74,7 +74,69 @@ let logger: Logger = Logger(subsystem: "com.needletails.CafeSmartApp", category:
                     }
                     isRunning = false
                 }
+                
             }
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+//            .onChange(of: socket.socketReceiver.webSocketFrame) { _, frame in
+//                guard let frame else { return }
+//                notifications.append(frame)
+//                if !isRunning {
+//                    isRunning = true
+//                    while !notifications.isEmpty {
+//                        switch notifications.removeLast() {
+//                        case .binary(let data):
+//                            guard let data else { return }
+//                            if let order: CreateOrderRequest = try? BSONDecoder().decode(CreateOrderRequest.self, from: Document(data: data)) {
+//                                let count = order.items.count
+//                                let customer = order.customerName?.isEmpty == false ? order.customerName! : "New customer"
+//                                let summary = count > 0 ? "New order (\(count) items): \(customer)" : "New order: \(customer)"
+//                                if authenticationViewModel.user?.isAdmin == true {
+//                                    appNotificationCenter.show(summary, iconSystemName: "bell.fill", duration: 2.0)
+//                                }
+//                            } else if let packet = try? BSONDecoder().decode(MessagePacket.self, from: Document(data: data)) {
+//                                switch packet {
+//                                case .inventory(let info):
+//                                    switch info {
+//                                    case .runningLow(let item):
+//                                        let message = "Inventory running low: \(item.name) (\(item.quantity) \(item.unit))"
+//                                        if authenticationViewModel.user?.isAdmin == true {
+//                                            appNotificationCenter.show(message, iconSystemName: "exclamationmark.triangle.fill", duration: 3.0)
+//                                        }
+//                                    default:
+//                                        continue
+//                                    }
+//                                default:
+//                                    continue
+//                                }
+//                            }
+//                        default:
+//                            continue
+//                        }
+//                    }
+//                    isRunning = false
+//                }
+//            }
             .task {
                 logger.info("Skip app logs are viewable in the Xcode console for iOS; Android logs can be viewed in Studio or using adb logcat")
             }

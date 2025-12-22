@@ -274,10 +274,47 @@ extension OrderFlowView {
             tableId: nil,
             guests: nil,
             reservationId: nil)
+        
         Task.detached {
             let encoded = try BSONEncoder().encode(request).makeData()
             try await WebSocketClient.shared.sendBinary(encoded, to: "/api/auth/ws/merchant")
         }
+        
+        do {
+            
+            _ = try await orderViewModel.createOrder(request)
+            cart.removeAll()
+        } catch {
+            logger.log("Checkout failed: \(String(describing: error))")
+        }
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+//        Task.detached {
+//            let encoded = try BSONEncoder().encode(request).makeData()
+//            try await WebSocketClient.shared.sendBinary(encoded, to: "/api/auth/ws/merchant")
+//        }
         do { _ = try await orderViewModel.createOrder(request)
             cart.removeAll()
         } catch {

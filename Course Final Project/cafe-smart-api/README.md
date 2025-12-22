@@ -4,19 +4,87 @@
 
 ## Getting Started
 
-To build the project using the Swift Package Manager, run the following command in the terminal from the root of the project:
-```bash
-swift build
-```
+### Prerequisites
 
-To run the project and start the server, use the following command:
-```bash
-swift run
-```
+- Swift 6.0+
+- macOS 14+ or Ubuntu Noble
+- MongoDB 6+ (optional, can use in-memory store for testing)
 
-To execute tests, use the following command:
+### Setup
+
+1. **Configure environment variables**
+
+   Create a `.env` file in the project root:
+   ```bash
+   cp env.example .env
+   ```
+
+   Edit `.env` and set the required variables (see [Environment Variables](#environment-variables) below).
+
+2. **Build the project**
+
+   Using Swift Package Manager from the project root:
+   ```bash
+   swift build
+   ```
+
+3. **Run the server**
+
+   From the project root:
+   ```bash
+   swift run CafeSmartApi serve --env development --hostname 0.0.0.0 --port 8080
+   ```
+
+   Server will be available at: http://localhost:8080
+
+4. **Run tests**
+
+   ```bash
+   swift test
+   ```
+
+### Environment Variables
+
+Create a `.env` file in the project root with the following variables:
+
+**Required:**
+- `MONGO_URL`: MongoDB connection URI, e.g. `mongodb://localhost:27017/cafesmart`. If unset and `USE_TEST_STORE=true`, uses in-memory store.
+- `HMAC_SECRET`: JWT HMAC signing secret (use a long, random string for production).
+- `ADMIN_USERNAMES`: Comma-separated admin email addresses for admin access.
+
+**Optional:**
+- `USE_TEST_STORE`: Set to `true` to use in-memory store (no MongoDB required). Useful for testing.
+- `LOG_LEVEL`: Logging level (e.g., `debug`, `info`, `warning`, `error`).
+
+**Note:** The `.env` file is ignored by git (see `.gitignore`). Never commit sensitive credentials.
+
+### Running from Xcode
+
+When running the Vapor server from Xcode, you must configure the working directory:
+
+1. Open the Xcode scheme editor (Product → Scheme → Edit Scheme...)
+2. Select the "Run" configuration
+3. Go to the "Options" tab
+4. Set "Working Directory" to the project root directory (where the `.env` file is located)
+5. Alternatively, set "Use Custom Working Directory" and specify the full path to the project root
+
+**Important:** The server uses relative paths for:
+- Reading the `.env` file
+- Accessing ML model files in `Models/` directory
+- TLS certificate files (if configured)
+
+Without the correct working directory, the server may fail to find these resources.
+
+### Docker
+
+Build and run with Docker:
 ```bash
-swift test
+docker build -t cafesmart-api:latest .
+docker run --rm -p 8080:8080 \
+  -e MONGO_URL="mongodb://host.docker.internal:27017/cafesmart" \
+  -e HMAC_SECRET="change-me" \
+  -e ADMIN_USERNAMES="admin@example.com" \
+  cafesmart-api:latest
 ```
 
 ### See more

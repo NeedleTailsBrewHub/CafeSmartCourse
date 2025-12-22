@@ -9,16 +9,6 @@ import Foundation
 import Observation
 import BSON
 
-enum Constants {
-#if DEBUG
-    static let httpHost: String = "http://\(Constants.wsHost):8080/"
-    static let wsHost: String = "localhost"
-#else
-    static let httpHost: String = "https://\(Constants.wsHost):8080/"
-    static let wsHost: String = "localhost"
-#endif
-}
-
 enum Errors: Error {
     case failedRequest(Int), invalidData
 }

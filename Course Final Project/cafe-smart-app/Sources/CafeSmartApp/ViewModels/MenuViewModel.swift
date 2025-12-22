@@ -18,15 +18,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-enum Constants {
-#if DEBUG
-    static let httpHost: String = "http://\(Constants.wsHost):8080/"
-    static let wsHost: String = "localhost"
-#else
-    static let httpHost: String = "https://\(Constants.wsHost):8080/"
-    static let wsHost: String = "localhost"
-#endif
-}
 
 @MainActor
 @Observable

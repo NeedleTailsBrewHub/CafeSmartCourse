@@ -418,7 +418,7 @@ temp/
 *.sw?
 
 # Skip framework specific files
-Skip.env
+# Note: Skip.env is tracked and sanitized (not ignored)
 .skip/
 .skip/
 

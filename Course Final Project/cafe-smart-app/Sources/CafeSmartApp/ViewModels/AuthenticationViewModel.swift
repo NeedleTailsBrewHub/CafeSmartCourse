@@ -101,23 +101,36 @@ final class AuthenticationViewModel {
         
         try await WebSocketClient.shared.connect(
             host: Constants.wsHost,
-            route: "/api/auth/ws/merchant",
+            route: "/api/ws/merchant",
             headers: .init([("Authorization", "Bearer \(token.token)")]))
+        
         try await Task.sleep(until: .now + .seconds(2))
+        
         try await WebSocketClient.shared.sendPing("ping_data".data(using: .utf8)!, to: "/api/auth/ws/merchant")
         
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+//        try await WebSocketClient.shared.connect(
+//            host: Constants.wsHost,
+//            route: "/api/auth/ws/merchant",
+//            headers: .init([("Authorization", "Bearer \(token.token)")]))
+//        try await Task.sleep(until: .now + .seconds(2))
+//        try await WebSocketClient.shared.sendPing("ping_data".data(using: .utf8)!, to: "/api/auth/ws/merchant")
+        
     }
-    
-    enum Constants {
-#if DEBUG
-        static let httpHost: String = "http://\(Constants.wsHost):8080/"
-        static let wsHost: String = "localhost"
-#else
-        static let httpHost: String = "https://\(Constants.wsHost):8080/"
-        static let wsHost: String = "localhost"
-#endif
-    }
-    
+
     func signOut() {
         try? keychain.removeValue(forKey: "com.needletails.CafeSmart.access-token")
         try? keychain.removeValue(forKey: "com.needletails.CafeSmart.refresh-token")
