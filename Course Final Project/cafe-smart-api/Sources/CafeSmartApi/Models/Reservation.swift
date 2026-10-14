@@ -14,11 +14,10 @@
 
 import Foundation
 import Vapor
-import BSON
 
 public enum ReservationStatus: String, Codable, Sendable, Equatable { case active, completed, canceled }
 
-public struct Reservation: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct Reservation: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var id: String
     public var name: String
     public var partySize: Int
@@ -29,21 +28,17 @@ public struct Reservation: Content, Sendable, Equatable, AsyncResponseEncodable 
     public var areaId: String?
     public var tableId: String?
     public var status: ReservationStatus?
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-public struct ReservationsWrapper: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct ReservationsWrapper: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [Reservation]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 

@@ -30,13 +30,8 @@ actor RecipeController {
         return RecipesWrapper(items: items)
     }
     
-    struct Create: Content {
-        let menuItemId: String
-        let components: [RecipeComponent]
-    }
-    
     func create(req: Request) async throws -> Recipe {
-        let body = try req.content.decode(Create.self)
+        let body = try req.content.decode(CreateRecipeRequest.self)
         let rec = Recipe(
             id: ObjectId().hexString,
             menuItemId: body.menuItemId,
@@ -52,15 +47,11 @@ actor RecipeController {
         return rec
     }
     
-    struct Update: Content {
-        let components: [RecipeComponent]?
-    }
-    
     func update(req: Request) async throws -> Recipe {
         guard let id = req.parameters.get("id"), var rec = try await req.store.findRecipe(by: id) else {
             throw Abort(.notFound)
         }
-        let body = try req.content.decode(Update.self)
+        let body = try req.content.decode(UpdateRecipeRequest.self)
         if let comps = body.components {
             rec = Recipe(
                 id: rec.id,

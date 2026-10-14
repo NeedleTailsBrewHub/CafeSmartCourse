@@ -21,9 +21,9 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-import BSON
+import BinaryCodable
 import SkipKeychain
-import JWTKit
+@_spi(PostQuantum) import JWTKit
 
 enum RequestType: String {
     case post = "POST"
@@ -42,7 +42,7 @@ struct TokenResponse: Codable {
    let token: String
    let refreshToken: String?
    let expiresAt: Date
-   let user: User
+   let user: UserPublic
 }
 
 extension URLSession {
@@ -53,22 +53,53 @@ extension URLSession {
     // MARK: - Token Storage Helpers
     actor AuthTokenStore {
         static let shared = AuthTokenStore()
-        private let keychain = Keychain.shared
-       
-        func getAccessToken() -> String? {
-            try? keychain.string(forKey: "com.example.app.access-token")
+        private static let accessKey = "com.example.app.access-token"
+        private static let refreshKey = "com.example.app.refresh-token"
+
+        /// In-memory cache so background actors (e.g. AIService train) don't depend on
+        /// Keychain access from a non-main thread, which can fail silently with `try?`.
+        private var cachedAccessToken: String?
+        private var cachedRefreshToken: String?
+
+        func getAccessToken() async -> String? {
+            if let cachedAccessToken, !cachedAccessToken.isEmpty { return cachedAccessToken }
+            let token = await MainActor.run {
+                try? Keychain.shared.string(forKey: Self.accessKey)
+            }
+            cachedAccessToken = token
+            return token
         }
 
-        func getRefreshToken() -> String? {
-            try? keychain.string(forKey: "com.example.app.refresh-token")
+        func getRefreshToken() async -> String? {
+            if let cachedRefreshToken, !cachedRefreshToken.isEmpty { return cachedRefreshToken }
+            let token = await MainActor.run {
+                try? Keychain.shared.string(forKey: Self.refreshKey)
+            }
+            cachedRefreshToken = token
+            return token
         }
 
-        func setAccessToken(_ token: String) {
-            try? keychain.set(token, forKey: "com.example.app.access-token")
+        func setAccessToken(_ token: String) async {
+            cachedAccessToken = token
+            await MainActor.run {
+                try? Keychain.shared.set(token, forKey: Self.accessKey)
+            }
         }
 
-        func setRefreshToken(_ token: String) {
-            try? keychain.set(token, forKey: "com.example.app.refresh-token")
+        func setRefreshToken(_ token: String) async {
+            cachedRefreshToken = token
+            await MainActor.run {
+                try? Keychain.shared.set(token, forKey: Self.refreshKey)
+            }
+        }
+
+        func clear() async {
+            cachedAccessToken = nil
+            cachedRefreshToken = nil
+            await MainActor.run {
+                try? Keychain.shared.removeValue(forKey: Self.accessKey)
+                try? Keychain.shared.removeValue(forKey: Self.refreshKey)
+            }
         }
     }
 
@@ -102,19 +133,28 @@ extension URLSession {
             }
             var request = URLRequest(url: url)
             request.httpMethod = RequestType.post.rawValue
-            request.addValue("application/bson", forHTTPHeaderField: "Content-Type")
+            request.addValue("application/x-binary-codable", forHTTPHeaderField: "Content-Type")
+            request.addValue("application/x-binary-codable", forHTTPHeaderField: "Accept")
             request.setValue("Bearer \(refreshToken)", forHTTPHeaderField: "Authorization")
 
             let (data, response) = try await session.upload(for: request, from: Data())
             guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
                 throw URLError(.userAuthenticationRequired)
             }
-            let decoded = try BSONDecoder().decode(TokenResponse.self, from: Document(data: data))
+            let decoded = try BinaryDecoder().decode(TokenResponse.self, from: data)
             await AuthTokenStore.shared.setAccessToken(decoded.token)
             if let refreshTokenValue = decoded.refreshToken {
                 await AuthTokenStore.shared.setRefreshToken(refreshTokenValue)
             }
             return decoded
+        }
+    }
+
+    /// Warm the in-memory token cache after login/password update (MainActor keychain writes).
+    static func persistSession(accessToken: String, refreshToken: String?) async {
+        await AuthTokenStore.shared.setAccessToken(accessToken)
+        if let refreshToken {
+            await AuthTokenStore.shared.setRefreshToken(refreshToken)
         }
     }
     
@@ -148,7 +188,7 @@ extension URLSession {
             method: method,
             headers: mergedHeaders,
             body: body,
-            codableType: .bson)
+            codableType: .binary)
 
         // Check for 401 and try refresh once
         if let httpResponse = response.urlResponse as? HTTPURLResponse, httpResponse.statusCode == 401 {
@@ -163,7 +203,7 @@ extension URLSession {
                     method: method,
                     headers: mergedHeaders,
                     body: body,
-                    codableType: .bson)
+                    codableType: .binary)
             } catch {
                 // Propagate original 401 response if refresh fails
                 return response
@@ -172,9 +212,53 @@ extension URLSession {
 
         return response
     }
+
+    /// Authenticated JSON request with the same 401 → refresh → retry path as BinaryCodable calls.
+    func authenticatedJSONRequest<T: Codable>(
+        method: RequestType,
+        httpHost: String,
+        path: String,
+        body: Data? = nil
+    ) async throws -> Response<T> {
+        let absolute = httpHost.hasSuffix("/") ? httpHost + path : httpHost + "/" + path
+        guard let url = URL(string: absolute) else {
+            throw URLError(.badURL)
+        }
+
+        var headers: [String: String] = [:]
+        if let stored = await AuthTokenStore.shared.getAccessToken(), !stored.isEmpty {
+            headers["Authorization"] = "Bearer \(stored)"
+        }
+
+        var response: Response<T> = try await request(
+            url: url,
+            method: method,
+            headers: headers,
+            body: body,
+            codableType: .json)
+
+        if let httpResponse = response.urlResponse as? HTTPURLResponse, httpResponse.statusCode == 401 {
+            do {
+                _ = try await TokenRefresher.shared.refreshIfNeeded(session: self, httpHost: httpHost)
+                if let newToken = await AuthTokenStore.shared.getAccessToken() {
+                    headers["Authorization"] = "Bearer \(newToken)"
+                }
+                response = try await request(
+                    url: url,
+                    method: method,
+                    headers: headers,
+                    body: body,
+                    codableType: .json)
+            } catch {
+                return response
+            }
+        }
+
+        return response
+    }
     
     enum CodableType {
-        case bson, json
+        case binary, json
     }
     
     func request<T: Codable>(
@@ -182,15 +266,17 @@ extension URLSession {
         method: RequestType,
         headers: [String: String]? = nil,
         body: Data? = nil,
-        codableType: CodableType = .bson
+        codableType: CodableType = .binary
     ) async throws -> Response<T> {
         var request = URLRequest(url: url)
         request.httpMethod = method.rawValue
         request.timeoutInterval = 60 * 5
         if codableType == .json {
             request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.addValue("application/json", forHTTPHeaderField: "Accept")
         } else {
-            request.addValue("application/bson", forHTTPHeaderField: "Content-Type")
+            request.addValue("application/x-binary-codable", forHTTPHeaderField: "Content-Type")
+            request.addValue("application/x-binary-codable", forHTTPHeaderField: "Accept")
         }
         // Set headers if provided
         if let headers = headers {
@@ -227,16 +313,26 @@ extension URLSession {
         let decodedResponse: T
         // Decode the response based on the expected type
         if codableType == .json {
-            decodedResponse = try JSONDecoder().decode(T.self, from: data)
+            // API train/job endpoints encode Date as ISO-8601 (see CafePredictorController.jsonResponse).
+            // Default JSONDecoder expects reference-date doubles and fails with
+            // "The data couldn’t be read because it isn’t in the correct format."
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            decodedResponse = try decoder.decode(T.self, from: data)
         } else {
-            decodedResponse = try BSONDecoder().decode(T.self, from: Document(data: data))
+            decodedResponse = try BinaryDecoder().decode(T.self, from: data)
         }
         return Response(data: decodedResponse, urlResponse: response)
     }
     
-    static func makeToken(email: String) async throws -> String {
+    static func makeToken(email: String, seed: String) async throws -> String {
+        let seedData = Data(seed.utf8)
+        guard seedData.count == 32 else {
+            throw URLError(.cannotDecodeContentData, userInfo: [NSLocalizedDescriptionKey: "MLDSA seed must be exactly 32 bytes"])
+        }
         let keys = JWTKeyCollection()
-        await keys.add(hmac: .init(from: email.data(using: .utf8)!), digestAlgorithm: .sha256)
+        let privateKey = try MLDSA87PrivateKey(seedRepresentation: seedData)
+        await keys.add(mldsa: privateKey)
         let payload = UserJWT(subject: .init(stringLiteral: email), expiration: .init(value: Date().addingTimeInterval(3600)))
         return try await keys.sign(payload)
     }

@@ -1,150 +1,182 @@
 //
 //  MyOrdersView.swift
-//  CafeSmart
-//
-//  Created by NeedleTails on 8/19/25
-//
-//  Copyright (c) 2025 NeedleTails Organization.
-//
-//  This project is proprietary and confidential.
-//
-//  MIT License
-//
-//  This file is part of the CafeSmart Project
+//  CafeSmartDev
 //
 
 import SwiftUI
 
 struct MyOrdersView: View {
     @Environment(OrderViewModel.self) var orderViewModel
-    @State var availableWidth: CGFloat = 0
-    @State var orders: [Order] = []
-    
+    var onStartOrder: (@MainActor () -> Void)? = nil
+    @State var orderPendingCancel: Order?
+
+#if os(Android)
+    private let emptyIcon = "orders"
+#else
+    private let emptyIcon = "tray.full.fill"
+#endif
+
+    private var hasActiveOrders: Bool {
+        orderViewModel.orders.contains {
+            $0.status == .pending || $0.status == .preparing || $0.status == .ready
+        }
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(spacing: AppSpacing.lg) {
-                if let err = orderViewModel.errorMessage, !err.isEmpty {
-                    Text(err)
-                        .font(AppFont.footnote())
-                        .foregroundStyle(.red)
-                        .padding(10)
-                        .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                SectionHeader(title: "My orders", subtitle: "Recent activity")
+        ScreenCanvas {
+            SectionHeader(
+                title: "Your orders",
+                subtitle: "Track pickup and manage pending tickets")
+
+            if let err = orderViewModel.errorMessage, !err.isEmpty {
+                ErrorBanner(message: err)
+            }
+
+            if orderViewModel.isLoading && orderViewModel.orders.isEmpty {
+                LoadingBlock()
+            } else if orderViewModel.orders.isEmpty {
+                EmptyState(
+                    title: "No orders yet",
+                    subtitle: "When you place a pickup order, it will show up here.",
+                    systemImage: emptyIcon,
+                    actionTitle: onStartOrder == nil ? nil : "Order now",
+                    action: onStartOrder
+                )
+            } else {
                 LazyVStack(spacing: AppSpacing.md) {
-                    if orderViewModel.orders.isEmpty {
-                        Text("No orders yet.")
-                            .font(AppFont.subheadline())
-                            .foregroundStyle(.secondary)
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .center)
-                    }
-                    ForEach(orders.reversed()) { order in
-                        CardContainer(
-                            padding: AppSpacing.md,
-                            cornerRadius: 16,
-                            backgroundColor: .surfaceColor,
-                            borderColor: .gray.opacity(0.15),
-                            borderWidth: 1,
-                            shadowEnabled: true,
-                            shadowColor: .black.opacity(0.05),
-                            shadowRadius: 10,
-                            shadowX: 0,
-                            shadowY: 6) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("#\(order.id.prefix(6))")
-                                        .font(AppFont.headline())
-                                    Spacer()
-                                    Text(order.status.rawValue.capitalized)
-                                        .font(AppFont.footnote())
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Color.appColor.opacity(0.12))
-                                        .clipShape(Capsule())
-                                }
-                                HStack {
-                                    if let name = order.customerName, !name.isEmpty {
-                                        Text(name)
-                                            .font(AppFont.footnote())
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    VStack(alignment: .trailing, spacing: 2) {
-                                        Text("\(order.items.count) items")
-                                            .font(AppFont.footnote())
-                                            .foregroundStyle(.secondary)
-                                        if let when = order.pickupTime {
-                                            Text(when, style: .time)
-                                                .font(AppFont.footnote())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                                Divider()
-                                VStack(alignment: .leading, spacing: 6) {
-                                    ForEach(order.items.indices, id: \.self) { idx in
-                                        let item = order.items[idx]
-                                        HStack(alignment: .firstTextBaseline) {
-                                            Text(item.name ?? "Item")
-                                                .font(AppFont.body())
-                                            Spacer()
-                                            Text("x\(item.quantity)")
-                                                .font(AppFont.footnote())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        if let notes = item.notes, !notes.isEmpty {
-                                            Text(notes)
-                                                .font(AppFont.footnote())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                                if order.status == .pending {
-                                    HStack {
-                                        Spacer()
-                                        Button(role: .destructive) {
-                                            Task {
-                                                await cancel(order: order)
-                                            }
-                                        } label: {
-                                            Text("Cancel order")
-                                        }
-                                    }
-                                }
-                            }
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .leading)
-                        }
-                    }
-                    .onChange(of: orderViewModel.orders) { _, newValue in
-                        print("New orders: \(newValue)")
-                        self.orders = newValue
+                    ForEach(orderViewModel.orders.reversed()) { order in
+                        orderCard(order)
                     }
                 }
-                .padding()
             }
         }
-        .captureWidth(in: $availableWidth)
-        .navigationTitle("My orders")
+        .navigationTitle("Orders")
         .task {
-            print("Current orders: \(orderViewModel.orders)")
-            if orderViewModel.orders.isEmpty {
-                do {
-                    try await orderViewModel.fetchOrders()
-                    orders = orderViewModel.orders
-                } catch {
-                    orderViewModel.errorMessage = "Failed to load orders."
-                }
-            } else {
-                orders = orderViewModel.orders
+            await refreshOrders()
+            while !Task.isCancelled && hasActiveOrders {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                await refreshOrders(silent: true)
             }
         }
         .refreshable {
-            do {
-                try await orderViewModel.fetchOrders()
-            } catch {
-                orderViewModel.errorMessage = "Failed to refresh orders."
+            await refreshOrders()
+        }
+        .confirmationDialog(
+            "Cancel this order?",
+            isPresented: Binding(
+                get: { orderPendingCancel != nil },
+                set: { if !$0 { orderPendingCancel = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Cancel order", role: .destructive) {
+                if let order = orderPendingCancel {
+                    Task { await cancel(order: order) }
+                }
+                orderPendingCancel = nil
+            }
+            Button("Keep order", role: .cancel) {
+                orderPendingCancel = nil
+            }
+        } message: {
+            Text("The kitchen will stop preparing this ticket.")
+        }
+    }
+
+    @ViewBuilder
+    private func orderCard(_ order: Order) -> some View {
+        SurfacePanel {
+            VStack(alignment: .leading, spacing: AppSpacing.md) {
+                AdaptiveDetailRow {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Order #\(order.id.prefix(6).uppercased())")
+                            .font(AppFont.headline())
+                        Text(order.createdAt, style: .time)
+                            .font(AppFont.caption())
+                            .foregroundStyle(.secondary)
+                    }
+                } actions: {
+                    StatusChip(
+                        text: statusTitle(for: order.status),
+                        tone: chipTone(for: order.status)
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(order.items.indices, id: \.self) { idx in
+                        let item = order.items[idx]
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.name ?? "Item")
+                                    .font(AppFont.body())
+                                if let size = friendlySize(from: item.notes) {
+                                    Text(size)
+                                        .font(AppFont.caption())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Text("×\(item.quantity)")
+                                .font(AppFont.footnote())
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .padding(.vertical, AppSpacing.xs)
+                        if idx < order.items.count - 1 {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.horizontal, AppSpacing.sm)
+                .padding(.vertical, AppSpacing.xs)
+                .background(Color.elevatedSurfaceColor.opacity(0.65))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+
+                if order.status == .pending {
+                    DestructiveButton(title: "Cancel order", fillWidth: true) {
+                        orderPendingCancel = order
+                    }
+                }
+            }
+        }
+    }
+
+    private func statusTitle(for status: OrderStatus) -> String {
+        switch status {
+        case .pending: return "Received"
+        case .preparing: return "Being prepared"
+        case .ready: return "Ready for pickup"
+        case .completed: return "Completed"
+        case .canceled: return "Canceled"
+        }
+    }
+
+    private func friendlySize(from notes: String?) -> String? {
+        guard let notes, notes.lowercased().hasPrefix("size:") else { return nil }
+        let value = notes.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+#if os(Android)
+    // Keep icon mapping local for MetaLabel if needed later.
+#endif
+
+    private func chipTone(for status: OrderStatus) -> StatusChipTone {
+        switch status {
+        case .pending: return .warning
+        case .preparing, .ready: return .accent
+        case .completed: return .success
+        case .canceled: return .danger
+        }
+    }
+
+    @MainActor
+    private func refreshOrders(silent: Bool = false) async {
+        do {
+            try await orderViewModel.fetchOrders()
+        } catch {
+            if !silent {
+                orderViewModel.errorMessage = "Failed to load orders."
             }
         }
     }
@@ -160,5 +192,3 @@ extension MyOrdersView {
         }
     }
 }
-
-

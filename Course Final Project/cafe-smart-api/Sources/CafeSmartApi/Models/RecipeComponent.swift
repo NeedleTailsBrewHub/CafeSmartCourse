@@ -22,7 +22,6 @@
 
 import Foundation
 import Vapor
-import BSON
 
 public struct RecipeComponent: Codable, Sendable, Equatable {
 	public var sku: String
@@ -30,26 +29,22 @@ public struct RecipeComponent: Codable, Sendable, Equatable {
 	public var wastageRate: Double?
 }
 
-public struct Recipe: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct Recipe: Content, Sendable, Equatable, BinaryResponseEncodable {
 	public var id: String
 	public var menuItemId: String
 	public var components: [RecipeComponent]
 	public var createdAt: Date
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-public struct RecipesWrapper: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct RecipesWrapper: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [Recipe]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 

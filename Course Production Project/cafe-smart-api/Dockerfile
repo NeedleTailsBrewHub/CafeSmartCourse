@@ -16,7 +16,10 @@ WORKDIR /build
 # This creates a cached layer that can be reused
 # as long as your Package.swift/Package.resolved
 # files do not change.
+# NOTE: Vendor/swift-onnx-runtime must be a real directory copy in the build
+# context (Docker will not follow host symlinks that point outside the context).
 COPY ./Package.* ./
+COPY ./Vendor ./Vendor
 RUN swift package resolve \
         $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
@@ -46,6 +49,10 @@ RUN find -L "$(swift build --package-path /build -c release --show-bin-path)/" -
 # Ensure that by default, neither the directory nor any of its contents are writable.
 RUN [ -d /build/Public ] && { mv /build/Public ./Public && chmod -R a-w ./Public; } || true
 RUN [ -d /build/Resources ] && { mv /build/Resources ./Resources && chmod -R a-w ./Resources; } || true
+# ONNX Runtime shared library + Python trainer
+RUN mkdir -p ./lib ./Trainer \
+ && cp -a /build/Vendor/swift-onnx-runtime/Sources/CONNX/lib/. ./lib/ \
+ && cp -a /build/Trainer/. ./Trainer/
 
 # ================================
 # Run image
@@ -60,8 +67,11 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
       libjemalloc2 \
       ca-certificates \
       tzdata \
-# If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
-      # libcurl4 \
+      python3 \
+      python3-venv \
+      python3-pip \
+# FoundationNetworking (Stripe URLSession) requires libcurl4 on Linux.
+      libcurl4 \
 # If your app or its dependencies import FoundationXML, also install `libxml2`.
       # libxml2 \
     && rm -r /var/lib/apt/lists/*
@@ -75,15 +85,24 @@ WORKDIR /app
 # Copy built executable and any staged resources from builder
 COPY --from=build --chown=vapor:vapor /staging /app
 
+# Python venv for server-side training (sklearn → ONNX)
+RUN python3 -m venv /app/Trainer/.venv \
+ && /app/Trainer/.venv/bin/pip install --no-cache-dir -r /app/Trainer/requirements.txt \
+ && chown -R vapor:vapor /app/Trainer
+
 # Provide configuration needed by the built-in crash reporter and some sensible default behaviors.
 ENV SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=./swift-backtrace-static
+ENV LD_LIBRARY_PATH=/app/lib
+ENV TRAINER_PYTHON=/app/Trainer/.venv/bin/python
+# Default restock script; TrainJobService also runs train_busy_hour.py / train_reservations_hour.py by kind.
+ENV TRAINER_SCRIPT=/app/Trainer/train_restock.py
 
 # Ensure all further commands run as the vapor user
 USER vapor:vapor
 
-# Let Docker bind to port 8080
-EXPOSE 8080
+# HTTP (TLS in production) + CMK WebSocket (TLS in production)
+EXPOSE 8080 8081
 
-# Start the Vapor service when the image is run, default to listening on 8080 in production environment
+# Production requires API_LOCAL_FULL_CHAIN + API_LOCAL_PRIV_KEY (mount PEMs at runtime).
 ENTRYPOINT ["./cafe-smart-api"]
 CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]

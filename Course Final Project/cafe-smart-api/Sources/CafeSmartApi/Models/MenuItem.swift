@@ -14,9 +14,8 @@
 
 import Foundation
 import Vapor
-import BSON
 
-public struct MenuItem: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct MenuItem: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var id: String
     public var name: String
     public var description: String?
@@ -31,21 +30,17 @@ public struct MenuItem: Content, Sendable, Equatable, AsyncResponseEncodable {
     public struct SizeOption: Codable, Sendable, Equatable { public var name: String; public var priceDeltaCents: Int }
     public var allergens: [Allergen]? = nil
     public var sizeOptions: [SizeOption]? = nil
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-public struct MenuItemsWrapper: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct MenuItemsWrapper: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [MenuItem]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 

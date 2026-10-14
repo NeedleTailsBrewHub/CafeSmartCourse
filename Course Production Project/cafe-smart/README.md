@@ -2,6 +2,10 @@
 
 This is a [Skip](https://skip.tools) dual-platform app project.
 
+**Production client notes:** [docs/CLIENT_PRODUCTION.md](docs/CLIENT_PRODUCTION.md) — API host matrix, admin bootstrap, Mac vs mobile ML, and verification checklist.
+
+**UI notes:** [docs/CLIENT_UI.md](docs/CLIENT_UI.md) — AppImage/fonts, shared components, Mac vs phone layouts.
+
 
 <!-- TODO: add iOS screenshots to fastlane metadata
 ## iPhone Screenshots

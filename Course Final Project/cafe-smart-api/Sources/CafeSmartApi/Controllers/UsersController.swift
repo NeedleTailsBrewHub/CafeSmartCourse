@@ -5,18 +5,16 @@ import JWT
 import MongoKitten
 import Vapor
 
-struct UserPublic: Codable, Sendable, AsyncResponseEncodable {
+struct UserPublic: Codable, Sendable, BinaryResponseEncodable {
     
     let id: String
     let email: String
     let name: String?
     let isAdmin: Bool
     
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
@@ -32,17 +30,15 @@ struct LoginRequest: Content {
     let password: String
 }
 
-struct TokenResponse: Codable, Sendable, AsyncResponseEncodable {
+struct TokenResponse: Codable, Sendable, BinaryResponseEncodable {
     let token: String
     let refreshToken: String?
     let expiresAt: Date
     let user: UserPublic
     
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
@@ -78,12 +74,25 @@ actor UserController {
         if try await req.store.findUser(by: register.email.lowercased()) != nil {
             throw Abort(.conflict, reason: "User already exists")
         }
+        // Never trust client-supplied admin flags on open registration.
+        var grantAdmin = false
+        if register.isAdmin {
+            if req.storage.get(IsAdminKey.self) == true {
+                grantAdmin = true
+            } else if let actor = req.storage.get(UserKey.self) {
+                let admins = Set(
+                    (Environment.get("ADMIN_USERNAMES") ?? "")
+                        .split(separator: ",")
+                        .map { String($0).trimmingCharacters(in: .whitespaces) })
+                grantAdmin = actor.isAdmin || admins.contains(actor.email)
+            }
+        }
         let passwordHash = try await req.password.async.hash(register.password)
         let user = User(
             id: ObjectId().hexString,
             email: register.email.lowercased(),
             name: register.name,
-            isAdmin: register.isAdmin,
+            isAdmin: grantAdmin,
             passwordHash: passwordHash,
             symmetricKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }),
             createdAt: Date())
@@ -135,16 +144,19 @@ actor UserController {
     }
     
 
-    // Refresh access token
+    // Refresh access token using the encrypted refresh token from login
     func refreshToken(req: Request) async throws -> TokenResponse {
-        let incoming = try await req.jwt.verify(as: UserJWT.self)
-        let newExp = Date().addingTimeInterval(60 * 60 * 24)
-        let newPayload = UserJWT(subject: incoming.subject, expiration: .init(value: newExp))
-        let token = try await req.jwt.sign(newPayload)
-        // Fetch user for convenience
-        guard let user = try await req.store.findUser(byId: incoming.subject.value) else {
-            throw Abort(.notFound)
+        guard let bearer = req.headers.bearerAuthorization,
+              let encrypted = Data(base64Encoded: bearer.token)
+        else {
+            throw Abort(.unauthorized, reason: "Missing refresh token")
         }
+        guard let user = try await req.store.findUser(refreshToken: encrypted) else {
+            throw Abort(.unauthorized, reason: "Invalid refresh token")
+        }
+        let newExp = Date().addingTimeInterval(60 * 60 * 24)
+        let newPayload = UserJWT(subject: .init(value: user.id), expiration: .init(value: newExp))
+        let token = try await req.jwt.sign(newPayload)
         return TokenResponse(
             token: token,
             refreshToken: nil,
@@ -186,6 +198,7 @@ actor UserController {
         else {
             throw Abort(.notFound)
         }
+        try requireSelfOrAdmin(req, userId: id)
         let body = try req.content.decode(UserUpdateRequest.self)
         if let email = body.email {
             user = User(
@@ -211,6 +224,7 @@ actor UserController {
         else {
             throw Abort(.notFound)
         }
+        try requireSelfOrAdmin(req, userId: id)
         let request = try req.content.decode(ChangePasswordRequest.self)
         guard try await req.password.async.verify(request.oldPassword, created: user.passwordHash)
         else {
@@ -291,7 +305,18 @@ actor UserController {
         guard let id = req.parameters.get("id") else {
             throw Abort(.badRequest)
         }
+        try requireSelfOrAdmin(req, userId: id)
         try await req.store.deleteUser(id: id)
         return .noContent
+    }
+
+    private func requireSelfOrAdmin(_ req: Request, userId: String) throws {
+        guard let actor = req.storage.get(UserKey.self) else {
+            throw Abort(.unauthorized)
+        }
+        let isAdmin = req.storage.get(IsAdminKey.self) == true || actor.isAdmin
+        guard isAdmin || actor.id == userId else {
+            throw Abort(.forbidden, reason: "Not allowed to modify this user")
+        }
     }
 }

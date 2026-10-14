@@ -88,12 +88,10 @@ actor InventoryController {
     }
 }
 
-public struct InventoryItemsWrapper: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct InventoryItemsWrapper: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [InventoryItem]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }

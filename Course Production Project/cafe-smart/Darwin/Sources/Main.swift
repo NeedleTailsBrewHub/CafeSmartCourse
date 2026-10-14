@@ -28,7 +28,7 @@ private typealias AppDelegate = CafeSmartAppDelegate
         WindowGroup {
             AppRootView()
 #if canImport(AppKit)
-                .frame(minWidth: 980, minHeight: 680)
+                .frame(minWidth: 900, minHeight: 640)
 #endif
         }
         #if canImport(AppKit)

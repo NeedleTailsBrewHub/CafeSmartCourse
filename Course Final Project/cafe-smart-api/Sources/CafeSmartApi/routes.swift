@@ -12,21 +12,17 @@ func routes(_ app: Application) throws {
     let inventoryController = InventoryController()
     let recipeController = RecipeController()
     let menuController = MenuController()
-    #if canImport(CoreML)
     let predictorController = CafePredictorController()
     
     // Users
-    // https://localhost:8080/api/auth/some-endpoint
-    // https://localhost:8080/api/register
     apiRoute.post("register", use: userController.register)
     apiRoute.post("login", use: userController.login)
     userProtected.post("logout", use: userController.logout)
     
     // Orders
     userProtected.post("orders", use: orderController.create)
-//    userProtected.get("orders", ":email" use: orderController.filteredList)
     adminProtected.get("orders", use: orderController.list)
-    adminProtected.get("orders", ":id", use: orderController.get) //http://locahost:8080/api/auth/orders/some-uuid
+    adminProtected.get("orders", ":id", use: orderController.get)
     adminProtected.put("orders", ":id", "status", use: orderController.updateStatus)
     adminProtected.delete("orders", ":id", use: orderController.delete)
     
@@ -54,12 +50,19 @@ func routes(_ app: Application) throws {
     
     // Predictor
     adminProtected.get("predictor", "export", use: predictorController.exportCSV(req:))
-    adminProtected.post("predictor", "models", "upload", use: predictorController.uploadModel(req:))
-    #endif
-    
-//    ws://localhost:8080/api/auth/ws/merchant
-    adminProtected.webSocket("ws", "merchant") { req, websocket in
-        await app.realtimeHub.subscribe(topic: .merchant, ws: websocket)
-    }
-    
+    adminProtected.on(
+        .POST, "predictor", "models", "upload",
+        body: .collect(maxSize: "200mb"),
+        use: predictorController.uploadModel(req:))
+    adminProtected.get("predictor", "models", use: predictorController.listModels(req:))
+    adminProtected.post("predictor", "models", "activate", use: predictorController.activateModel(req:))
+    adminProtected.post("predictor", "models", "delete", use: predictorController.deleteModel(req:))
+    adminProtected.post("predictor", "instantiate", use: predictorController.instantiatePredictor(req:))
+    adminProtected.post("predictor", "restock", "decide", use: predictorController.decideRestock(req:))
+    adminProtected.get("predictor", "capabilities", use: predictorController.capabilities(req:))
+    adminProtected.post("predictor", "train", use: predictorController.startTrain(req:))
+    adminProtected.get("predictor", "train", use: predictorController.listTrainJobs(req:))
+    adminProtected.get("predictor", "train", ":jobId", use: predictorController.getTrainJob(req:))
+
+    // Realtime WebSockets are served by ConnectionManagerKit on WS_PORT (default 8081).
 }

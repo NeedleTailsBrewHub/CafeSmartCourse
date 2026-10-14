@@ -2,10 +2,10 @@ import Foundation
 import SkipFuse
 import SwiftUI
 import ConnectionManagerKit
-import BSON
+import BinaryCodable
 
 /// A logger for the CafeSmartApp module.
-let logger: Logger = Logger(subsystem: "com.example.app", category: "CafeSmartApp")
+let logger: Logger = Logger(subsystem: "com.cafesmart.dev", category: "CafeSmartApp")
 
 /// The shared top-level view for the app, loaded from the platform-specific App delegates below.
 ///
@@ -16,6 +16,7 @@ let logger: Logger = Logger(subsystem: "com.example.app", category: "CafeSmartAp
     @State var inventoryViewModel = InventoryViewModel()
     @State var menuViewModel = MenuViewModel()
     @State var orderViewModel = OrderViewModel()
+    @State var cartViewModel = CartViewModel()
     @State var appNotificationCenter = AppNotificationCenter()
     @State var notifications: [SocketReceiver.WebSocketOpcode] = []
     @State var isRunning = false
@@ -30,6 +31,7 @@ let logger: Logger = Logger(subsystem: "com.example.app", category: "CafeSmartAp
             .environment(inventoryViewModel)
             .environment(menuViewModel)
             .environment(orderViewModel)
+            .environment(cartViewModel)
             .environment(socket.socketReceiver)
             .environment(appNotificationCenter)
             .overlay(alignment: .top) {
@@ -41,29 +43,73 @@ let logger: Logger = Logger(subsystem: "com.example.app", category: "CafeSmartAp
                 notifications.append(frame)
                 if !isRunning {
                     isRunning = true
+                    defer { isRunning = false }
                     while !notifications.isEmpty {
-                        switch notifications.removeLast() {
+                        switch notifications.removeFirst() {
                         case .binary(let data):
-                            guard let data else { return }
-                            if let order: CreateOrderRequest = try? BSONDecoder().decode(CreateOrderRequest.self, from: Document(data: data)) {
+                            guard let data else { continue }
+                            if let order: CreateOrderRequest = try? BinaryDecoder().decode(CreateOrderRequest.self, from: data) {
                                 let count = order.items.count
                                 let customer = order.customerName?.isEmpty == false ? order.customerName! : "New customer"
                                 let summary = count > 0 ? "New order (\(count) items): \(customer)" : "New order: \(customer)"
                                 if authenticationViewModel.user?.isAdmin == true {
                                     appNotificationCenter.show(summary, iconSystemName: "bell.fill", duration: 2.0)
                                 }
-                            } else if let packet = try? BSONDecoder().decode(MessagePacket.self, from: Document(data: data)) {
+                            } else if let packet = try? BinaryDecoder().decode(MessagePacket.self, from: data) {
+                                guard authenticationViewModel.user?.isAdmin == true else { continue }
                                 switch packet {
                                 case .inventory(let info):
                                     switch info {
                                     case .runningLow(let item):
                                         let message = "Inventory running low: \(item.name) (\(item.quantity) \(item.unit))"
-                                        if authenticationViewModel.user?.isAdmin == true {
-                                            appNotificationCenter.show(message, iconSystemName: "exclamationmark.triangle.fill", duration: 3.0)
-                                        }
+                                        appNotificationCenter.show(message, iconSystemName: "exclamationmark.triangle.fill", duration: 3.0)
                                     default:
                                         continue
                                     }
+                                case .modelUploaded(let artifact):
+                                    let runtime = artifact.runtime?.rawValue ?? "model"
+                                    appNotificationCenter.show(
+                                        "Model ready: \(artifact.kind.rawValue) (\(runtime))",
+                                        iconSystemName: "checkmark.seal.fill",
+                                        duration: 3.0
+                                    )
+                                    #if os(macOS)
+                                    Task { await ModelsAdminViewModel.shared.refresh() }
+                                    #endif
+                                case .modelActivated(let kind, let id):
+                                    appNotificationCenter.show(
+                                        "Model activated: \(kind.rawValue) (\(id.prefix(8))…)",
+                                        iconSystemName: "checkmark.circle.fill",
+                                        duration: 2.5
+                                    )
+                                    #if os(macOS)
+                                    Task { await ModelsAdminViewModel.shared.refresh() }
+                                    #endif
+                                case .modelDeleted(let id):
+                                    appNotificationCenter.show(
+                                        "Model deleted (\(id.prefix(8))…)",
+                                        iconSystemName: "trash.fill",
+                                        duration: 2.5
+                                    )
+                                    #if os(macOS)
+                                    Task { await ModelsAdminViewModel.shared.refresh() }
+                                    #endif
+                                case .predictorReady(let kind):
+                                    appNotificationCenter.show(
+                                        "Predictor ready: \(kind.rawValue)",
+                                        iconSystemName: "bolt.badge.a.fill",
+                                        duration: 2.5
+                                    )
+                                case .restockDecisions(let decisions):
+                                    inventoryViewModel.applyRestockDecisions(decisions)
+                                    let need = decisions.filter(\.needRestock).count
+                                    let ok = decisions.count - need
+                                    let message = "Restock forecast: \(need) need reorder, \(ok) OK (\(decisions.count) SKUs)"
+                                    appNotificationCenter.show(
+                                        message,
+                                        iconSystemName: need > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                                        duration: 3.5
+                                    )
                                 default:
                                     continue
                                 }
@@ -72,71 +118,8 @@ let logger: Logger = Logger(subsystem: "com.example.app", category: "CafeSmartAp
                             continue
                         }
                     }
-                    isRunning = false
                 }
-                
             }
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-//            .onChange(of: socket.socketReceiver.webSocketFrame) { _, frame in
-//                guard let frame else { return }
-//                notifications.append(frame)
-//                if !isRunning {
-//                    isRunning = true
-//                    while !notifications.isEmpty {
-//                        switch notifications.removeLast() {
-//                        case .binary(let data):
-//                            guard let data else { return }
-//                            if let order: CreateOrderRequest = try? BSONDecoder().decode(CreateOrderRequest.self, from: Document(data: data)) {
-//                                let count = order.items.count
-//                                let customer = order.customerName?.isEmpty == false ? order.customerName! : "New customer"
-//                                let summary = count > 0 ? "New order (\(count) items): \(customer)" : "New order: \(customer)"
-//                                if authenticationViewModel.user?.isAdmin == true {
-//                                    appNotificationCenter.show(summary, iconSystemName: "bell.fill", duration: 2.0)
-//                                }
-//                            } else if let packet = try? BSONDecoder().decode(MessagePacket.self, from: Document(data: data)) {
-//                                switch packet {
-//                                case .inventory(let info):
-//                                    switch info {
-//                                    case .runningLow(let item):
-//                                        let message = "Inventory running low: \(item.name) (\(item.quantity) \(item.unit))"
-//                                        if authenticationViewModel.user?.isAdmin == true {
-//                                            appNotificationCenter.show(message, iconSystemName: "exclamationmark.triangle.fill", duration: 3.0)
-//                                        }
-//                                    default:
-//                                        continue
-//                                    }
-//                                default:
-//                                    continue
-//                                }
-//                            }
-//                        default:
-//                            continue
-//                        }
-//                    }
-//                    isRunning = false
-//                }
-//            }
             .task {
                 logger.info("Skip app logs are viewable in the Xcode console for iOS; Android logs can be viewed in Studio or using adb logcat")
             }
@@ -189,7 +172,18 @@ public enum MessagePacket: Codable, Sendable, Equatable {
     case modelActivated(kind: PredictorKind, id: String)
     case modelDeleted(id: String)
     case predictorReady(kind: PredictorKind)
+    case restockDecisions([RestockDecisionResponse])
     case none
+}
+
+public struct RestockDecisionResponse: Codable, Sendable, Equatable {
+    public let sku: String
+    public let needRestock: Bool
+    public let reorderQty: Int
+    public let reorderPoint: Int
+    public let leadTimeDays: Int
+    public let onHand: Int
+    public let forecastSumNextLeadTime: Int
 }
 
 public enum OrderInfo: Codable, Sendable, Equatable {
@@ -213,9 +207,9 @@ public enum InventoryInfo: Codable, Sendable, Equatable {
 //
 
 public struct MLModelArtifact: Codable, Sendable, Equatable {
-    // Some endpoints may return `id` as String while others return `_id` as ObjectId
+    // Some endpoints may return `id` as String while others return `_id`
     public var id: String?
-    public var _id: ObjectId?
+    public var _id: String?
     public var filename: String?
     public var runtime: PredictRuntime?
     public var kind: PredictorKind
@@ -223,6 +217,24 @@ public struct MLModelArtifact: Codable, Sendable, Equatable {
     public var bytes: Int?
     public var active: Bool
     public var uploadedAt: Date?
+}
+
+public struct ModelsList: Codable, Sendable, Equatable {
+    public let items: [MLModelArtifact]
+}
+
+public struct TrainJobDTO: Codable, Sendable, Equatable {
+    public var id: String
+    public var status: String
+    public var error: String?
+    public var artifactId: String?
+    public var kind: String?
+    public var createdAt: Date?
+    public var updatedAt: Date?
+}
+
+public struct TrainJobListDTO: Codable, Sendable, Equatable {
+    public var items: [TrainJobDTO]
 }
 
 public enum PredictorKind: String, Codable, Sendable, CaseIterable, Equatable {

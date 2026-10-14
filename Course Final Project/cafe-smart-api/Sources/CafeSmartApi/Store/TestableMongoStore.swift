@@ -31,6 +31,7 @@ public actor TestableMongoStore: MongoStore {
     private var tables: [Table] = []
     private var businessConfig: BusinessConfig? = nil
     private var modelArtifacts: [MLModelArtifact] = []
+    private var trainJobs: [TrainJob] = []
     
     // Refresh tokens stored with userId and expiry (no need to decrypt in tests)
     private struct StoredRefresh: Equatable {
@@ -49,26 +50,45 @@ public actor TestableMongoStore: MongoStore {
     public func listModelArtifacts() async throws -> [MLModelArtifact] { modelArtifacts }
     
     public func findModelArtifact(by id: String) async throws -> MLModelArtifact? {
-        guard let oid = ObjectId(id) else { return nil }
-        return modelArtifacts.first { $0._id == oid }
+        modelArtifacts.first { $0._id == id || $0.id == id }
     }
     
     public func setActiveModel(id: String) async throws {
-        guard let oid = ObjectId(id) else { return }
-        // Single active per kind: deactivate same kind, activate target
-        if let target = modelArtifacts.first(where: { $0._id == oid }) {
-            let kind = target.kind
-            modelArtifacts = modelArtifacts.map { item in
-                var m = item
-                if m.kind == kind { m.active = (m._id == oid) } else { /* keep as is */ }
-                return m
-            }
+        guard let target = modelArtifacts.first(where: { $0._id == id || $0.id == id }) else {
+            throw Abort(.notFound, reason: "Model artifact not found")
+        }
+        let kind = target.kind
+        modelArtifacts = modelArtifacts.map { item in
+            var m = item
+            if m.kind == kind { m.active = (m._id == target._id) }
+            return m
         }
     }
     
     public func deleteModelArtifact(id: String) async throws {
-        guard let oid = ObjectId(id) else { return }
-        modelArtifacts.removeAll { $0._id == oid }
+        if let art = modelArtifacts.first(where: { $0._id == id || $0.id == id }) {
+            try? FileManager.default.removeItem(atPath: art.storedAt)
+        }
+        modelArtifacts.removeAll { $0._id == id || $0.id == id }
+    }
+
+    public func upsertTrainJob(_ job: TrainJob) async throws {
+        trainJobs.removeAll { $0.id == job.id }
+        trainJobs.append(job)
+    }
+
+    public func findTrainJob(by id: String) async throws -> TrainJob? {
+        trainJobs.first { $0.id == id }
+    }
+
+    public func listTrainJobs(limit: Int) async throws -> [TrainJob] {
+        Array(trainJobs.sorted { $0.createdAt > $1.createdAt }.prefix(max(1, limit)))
+    }
+
+    public func pruneTrainJobs(keepLast: Int, maxAgeDays: Int) async throws {
+        _ = maxAgeDays
+        let sorted = trainJobs.sorted { $0.createdAt > $1.createdAt }
+        trainJobs = Array(sorted.prefix(max(1, keepLast)))
     }
     private var refreshTokens: [StoredRefresh] = []
     
@@ -344,7 +364,7 @@ public actor TestableMongoStore: MongoStore {
     }
     
     // MARK: - Seeding
-    private struct SeedBundle {
+    struct SeedBundle: Sendable {
         let users: [User]
         let inventory: [InventoryItem]
         let menu: [MenuItem]
@@ -355,6 +375,8 @@ public actor TestableMongoStore: MongoStore {
         let orders: [Order]
         let config: BusinessConfig
     }
+
+    static func makeSeedBundle() -> SeedBundle { makeDummyData() }
     
     private static func makeDummyData() -> SeedBundle {
         let now = Date()

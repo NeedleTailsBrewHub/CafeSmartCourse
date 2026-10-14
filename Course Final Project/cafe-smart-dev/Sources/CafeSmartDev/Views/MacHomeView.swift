@@ -16,64 +16,88 @@
 #if os(macOS)
 import SwiftUI
 import ConnectionManagerKit
-import BSON
 
 struct MacHomeView: View {
     @Environment(AuthenticationViewModel.self) var authenticationViewModel
     @Environment(SocketReceiver.self) var socketReceiver
     @Environment(AppNotificationCenter.self) var appNotificationCenter
+    @Environment(OrderViewModel.self) var orderViewModel
+    @Environment(MenuViewModel.self) var menuViewModel
+    @Environment(InventoryViewModel.self) var inventoryViewModel
+    @Environment(CartViewModel.self) private var cartViewModel
     @State var selection: HomeRoute? = nil
     @State var notificationText = ""
-    
+    @AppStorage("trainingLocation") private var trainingLocationRaw: String = "local"
+    @Bindable private var modelsAdmin = ModelsAdminViewModel.shared
+
     private var isAdmin: Bool {
         authenticationViewModel.user?.isAdmin ?? false
+    }
+
+    private var trainingLocation: TrainingLocation {
+        TrainingLocation(rawValue: trainingLocationRaw) ?? .local
     }
 
     private var welcomeName: String {
         authenticationViewModel.user?.name
         ?? authenticationViewModel.user?.email
-        ?? "Friend"
+        ?? "there"
     }
 
-    private var reservationIcon: String { "calendar.badge.clock" }
-    private var peakTimeIcon: String { "chart.bar.fill" }
     private var inventoryIcon: String { "shippingbox.fill" }
-    private var teamIcon: String { "person.2.fill" }
     private var menuIcon: String { "square.and.pencil" }
-    private var reportsIcon: String { "doc.text.magnifyingglass" }
     private var cartFillIcon: String { "cart.fill" }
-    private var calendarIcon: String { "calendar" }
     private var trayFullFill: String { "tray.full.fill" }
-    private var questionMarkCircleFill: String { "questionmark.circle.fill" }
+
+    private var availableMenuCount: Int {
+        menuViewModel.items.filter(\.isAvailable).count
+    }
+
+    private var activeOrderCount: Int {
+        orderViewModel.orders.filter {
+            $0.status == .pending || $0.status == .preparing || $0.status == .ready
+        }.count
+    }
+
+    private var lowStockCount: Int {
+        inventoryViewModel.items.filter { $0.quantity <= $0.reorderThreshold }.count
+    }
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                Section("Overview") {
+                Section {
                     Button {
                         selection = nil
                     } label: {
                         Label("Home", systemImage: "house.fill")
                     }
                     .buttonStyle(.plain)
+                    .tag(Optional<HomeRoute>.none)
+                } header: {
+                    Text("CaféSmart")
                 }
-                Section("Merchant console") {
-                    sidebarRow(title: "Reservations", systemName: reservationIcon, route: .reservations)
-                    sidebarRow(title: "Peak times", systemName: peakTimeIcon, route: .peakTimes)
-                    sidebarRow(title: "Inventory", systemName: inventoryIcon, route: .inventory)
-                    sidebarRow(title: "Team", systemName: teamIcon, route: .team)
-                    sidebarRow(title: "Menu & pricing", systemName: menuIcon, route: .menuPricing)
-                    sidebarRow(title: "Reports", systemName: reportsIcon, route: .reports)
+
+                if isAdmin {
+                    Section("Operations") {
+                        sidebarRow(title: "Inventory", systemName: inventoryIcon, route: .inventory)
+                        sidebarRow(title: "Menu & pricing", systemName: menuIcon, route: .menuPricing)
+                        sidebarRow(title: "Models & training", systemName: "cpu", route: .models)
+                    }
                 }
-                Section("Ordering & reservations") {
-                    sidebarRow(title: "Order now", systemName: cartFillIcon, route: .orderNow)
-                    sidebarRow(title: "Reserve a table", systemName: calendarIcon, route: .reserveTable)
-                    sidebarRow(title: "My orders", systemName: trayFullFill, route: .myOrders)
-                    sidebarRow(title: "Help & support", systemName: questionMarkCircleFill, route: .support)
+
+                Section("Ordering") {
+                    sidebarRow(title: "Order", systemName: cartFillIcon, route: .orderNow)
+                    sidebarRow(title: "Orders", systemName: trayFullFill, route: .myOrders)
+                }
+
+                Section("Account") {
+                    sidebarRow(title: "Profile", systemName: "person.crop.circle", route: .profile)
                 }
             }
             .listStyle(.sidebar)
-            .navigationTitle("CafeSmart")
+            .navigationTitle("CaféSmart")
+            .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
         } detail: {
             Group {
                 if let selection {
@@ -84,86 +108,214 @@ struct MacHomeView: View {
                         .navigationTitle("Home")
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.groupedBackgroundColor)
             .toolbar {
                 ToolbarItemGroup(placement: .automatic) {
-                    Button {
-                        selection = nil
-                    } label: {
-                        Label("Home", systemImage: "house.fill")
-                    }
                     if isAdmin {
-                        Button {
-                            Task.detached {
-                                let service = try await MLService()
-                                await service.startTraining()
+                        Menu {
+                            Picker("Training location", selection: $trainingLocationRaw) {
+                                Text("On this Mac (Create ML → CoreML)").tag("local")
+                                Text("On API server (Python → ONNX)").tag("server")
+                            }
+                            Button("Train Now") {
+                                let location = trainingLocation
+                                Task {
+                                    do {
+                                        let message = try await modelsAdmin.train(location: location)
+                                        appNotificationCenter.show(message, iconSystemName: "checkmark.circle.fill", duration: 3.0)
+                                    } catch {
+                                        logger.info("Error Training Data Model: \(error)")
+                                        appNotificationCenter.show(
+                                            "Training failed: \(error.localizedDescription)",
+                                            iconSystemName: "xmark.octagon.fill",
+                                            duration: 4.0
+                                        )
+                                    }
+                                }
+                            }
+                            .disabled(modelsAdmin.isTraining || (trainingLocation == .server && !modelsAdmin.serverTrainingAvailable))
+                            Button("Open Models…") {
+                                selection = .models
                             }
                         } label: {
                             Label("Train Data", systemImage: "bolt.badge.a.fill")
                         }
+                        .help("Train restock models")
+                    }
+                    if !cartViewModel.isEmpty {
+                        Button {
+                            selection = .orderNow
+                        } label: {
+                            Label("Cart (\(cartViewModel.itemCount))", systemImage: "cart.fill")
+                        }
+                        .help("Open cart")
                     }
                     Button {
                         selection = .profile
                     } label: {
-                        Image("Logo", bundle: .module)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 28, height: 28)
-                            .clipShape(Circle())
+                        BrandAvatar(size: 26)
                     }
                     .buttonStyle(.plain)
+                    .help("Profile")
                 }
             }
         }
-
-
-        .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+        .task {
+            if isAdmin {
+                await modelsAdmin.refresh()
+            }
+        }
     }
 
     private func sidebarRow(title: String, systemName: String, route: HomeRoute) -> some View {
         NavigationLink(value: route) {
             Label(title, systemImage: systemName)
         }
+        .tag(Optional(route))
+    }
+
+    private func dashboardRow(title: String, systemName: String, subtitle: String, route: HomeRoute) -> some View {
+        Button {
+            selection = route
+        } label: {
+            HStack(spacing: AppSpacing.md) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.appColor.opacity(0.12))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: systemName)
+                        .foregroundStyle(Color.appColor)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(AppFont.body())
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var dashboard: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
-                HStack(alignment: .center, spacing: AppSpacing.md) {
-                    VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                        Text("Welcome back").font(AppFont.footnote()).foregroundStyle(.secondary)
-                        Text(welcomeName).font(AppFont.title()).lineLimit(1)
-                        Text("Dashboard overview").font(AppFont.subheadline()).foregroundStyle(.secondary)
+                WelcomeHeader(
+                    name: welcomeName,
+                    subtitle: isAdmin
+                        ? "Merchant desk · inventory, menu, models"
+                        : "Guest desk · order and track pickups"
+                )
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: AppSpacing.md),
+                        GridItem(.flexible(), spacing: AppSpacing.md),
+                        GridItem(.flexible(), spacing: AppSpacing.md),
+                    ],
+                    spacing: AppSpacing.md
+                ) {
+                    MetricTile(
+                        title: "Menu live",
+                        value: "\(availableMenuCount)",
+                        systemName: "cup.and.saucer.fill"
+                    )
+                    MetricTile(
+                        title: "Active orders",
+                        value: "\(activeOrderCount)",
+                        systemName: "tray.full.fill"
+                    )
+                    if isAdmin {
+                        MetricTile(
+                            title: "Low stock",
+                            value: "\(lowStockCount)",
+                            systemName: "shippingbox.fill"
+                        )
+                    } else {
+                        MetricTile(
+                            title: "All orders",
+                            value: "\(orderViewModel.orders.count)",
+                            systemName: "list.bullet"
+                        )
                     }
-                    Spacer()
-                    Image("Logo", bundle: .module)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 44, height: 44)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(Color.appColor.opacity(0.2), lineWidth: 1))
                 }
 
                 if isAdmin {
-                    SectionHeader(title: "Merchant console", subtitle: "Operations & insights")
-                    GridMenu(
-                        items: [
-                            .init(title: "Reservations", systemName: reservationIcon, route: .reservations),
-                            .init(title: "Peak times", systemName: peakTimeIcon, route: .peakTimes),
-                            .init(title: "Inventory", systemName: inventoryIcon, route: .inventory),
-                            .init(title: "Team", systemName: teamIcon, route: .team),
-                            .init(title: "Menu & pricing", systemName: menuIcon, route: .menuPricing),
-                            .init(title: "Reports", systemName: reportsIcon, route: .reports)
-                        ]
-                    ) { item in selection = item.route }
-                    Divider()
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        SectionHeader(title: "Operations", subtitle: "Keep the line moving")
+                        VStack(spacing: 0) {
+                            dashboardRow(
+                                title: "Inventory",
+                                systemName: inventoryIcon,
+                                subtitle: "Adjust stock and review restock forecasts",
+                                route: .inventory
+                            )
+                            Divider().padding(.leading, 56)
+                            dashboardRow(
+                                title: "Menu & pricing",
+                                systemName: menuIcon,
+                                subtitle: "Edit availability and prices",
+                                route: .menuPricing
+                            )
+                            Divider().padding(.leading, 56)
+                            dashboardRow(
+                                title: "Models & training",
+                                systemName: "cpu",
+                                subtitle: "CoreML locally or ONNX on the API",
+                                route: .models
+                            )
+                        }
+                        .background(Color.surfaceColor)
+                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.panel, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AppRadius.panel, style: .continuous)
+                                .strokeBorder(Color.separatorColor.opacity(0.35), lineWidth: 1)
+                        )
+                    }
                 }
 
-                CustomerControlsSection { route in selection = route }
+                VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                    SectionHeader(title: "Ordering", subtitle: "Guest pickup path")
+                    VStack(spacing: 0) {
+                        dashboardRow(
+                            title: "Order",
+                            systemName: cartFillIcon,
+                            subtitle: cartViewModel.isEmpty
+                                ? "Browse the board and build a cart"
+                                : "\(cartViewModel.itemCount) in cart · continue checkout",
+                            route: .orderNow
+                        )
+                        Divider().padding(.leading, 56)
+                        dashboardRow(
+                            title: "Orders",
+                            systemName: trayFullFill,
+                            subtitle: "Track status and cancel pending tickets",
+                            route: .myOrders
+                        )
+                    }
+                    .background(Color.surfaceColor)
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.panel, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppRadius.panel, style: .continuous)
+                            .strokeBorder(Color.separatorColor.opacity(0.35), lineWidth: 1)
+                    )
+                }
             }
-            .padding(.horizontal, AppSpacing.lg)
-            .padding(.vertical, AppSpacing.lg)
+            .padding(AppSpacing.lg)
+            .frame(maxWidth: 920, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color.backgroundColor)
+        .background(Color.groupedBackgroundColor)
     }
 
     private func title(for route: HomeRoute) -> String {
@@ -174,6 +326,7 @@ struct MacHomeView: View {
         case .team: return "Team"
         case .menuPricing: return "Menu & pricing"
         case .reports: return "Reports"
+        case .models: return "Models & training"
         case .menu: return "Menu"
         case .orderNow: return "Order now"
         case .reserveTable: return "Reserve a table"
@@ -184,5 +337,3 @@ struct MacHomeView: View {
     }
 }
 #endif
-
-

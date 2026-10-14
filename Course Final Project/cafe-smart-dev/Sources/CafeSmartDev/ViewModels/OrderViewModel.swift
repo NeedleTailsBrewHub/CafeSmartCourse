@@ -15,7 +15,7 @@
 
 import Observation
 import SkipFuse
-import BSON
+import BinaryCodable
 import Foundation
 
 
@@ -47,7 +47,7 @@ final class OrderViewModel {
     }
 
     func createOrder(_ requestModel: CreateOrderRequest) async throws -> Order {
-        let body = try BSONEncoder().encode(requestModel).makeData()
+        let body = try BinaryEncoder().encode(requestModel)
         let response: Response<Order> = try await URLSession.shared.request(
             method: .post,
             httpHost: Constants.httpHost,
@@ -80,9 +80,9 @@ final class OrderViewModel {
     }
 
     func updateOrderStatus(id: String, status: OrderStatus) async throws -> Order {
-        let body = try BSONEncoder().encode(UpdateOrderStatusRequest(status: status)).makeData()
+        let body = try BinaryEncoder().encode(UpdateOrderStatusRequest(status: status))
         let response: Response<Order> = try await URLSession.shared.request(
-            method: .patch,
+            method: .put,
             httpHost: Constants.httpHost,
             url: "api/auth/orders/\(id)/status",
             token: nil,

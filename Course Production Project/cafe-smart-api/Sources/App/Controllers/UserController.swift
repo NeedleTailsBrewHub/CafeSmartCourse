@@ -18,44 +18,80 @@ import JWT
 import MongoKitten
 import Vapor
 
-struct UserPublic: Codable, Sendable, AsyncResponseEncodable {
-    
+struct UserPublic: Codable, Sendable, BinaryResponseEncodable {
     let id: String
     let email: String
     let name: String?
     let isAdmin: Bool
-    
+    let venueRole: VenueRole
+    let teamMemberId: String?
+
+    init(
+        id: String,
+        email: String,
+        name: String?,
+        isAdmin: Bool,
+        venueRole: VenueRole = .guest,
+        teamMemberId: String? = nil
+    ) {
+        self.id = id
+        self.email = email
+        self.name = name
+        self.isAdmin = isAdmin
+        self.venueRole = isAdmin ? .admin : venueRole
+        self.teamMemberId = teamMemberId
+    }
+
+    static func make(from user: User) -> UserPublic {
+        let admin = AdminEnv.isAdmin(user: user)
+        return UserPublic(
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            isAdmin: admin,
+            venueRole: admin ? .admin : user.resolvedVenueRole,
+            teamMemberId: user.teamMemberId)
+    }
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-struct RegisterRequest: Content {
+struct AssignVenueRoleRequest: Content {
+    var venueRole: VenueRole
+    var teamMemberId: String?
+}
+
+/// Wire name matches client `RegisterInfo` for BinaryCodable type headers.
+struct RegisterInfo: Content {
     let email: String
     let password: String
     let name: String?
     let isAdmin: Bool
 }
 
-struct LoginRequest: Content {
+@available(*, deprecated, renamed: "RegisterInfo")
+typealias RegisterRequest = RegisterInfo
+
+/// Wire name matches client `LoginInfo` for BinaryCodable type headers.
+struct LoginInfo: Content {
     let email: String
     let password: String
 }
 
-struct TokenResponse: Codable, Sendable, AsyncResponseEncodable {
+@available(*, deprecated, renamed: "LoginInfo")
+typealias LoginRequest = LoginInfo
+
+struct TokenResponse: Codable, Sendable, BinaryResponseEncodable {
     let token: String
     let refreshToken: String?
     let expiresAt: Date
     let user: UserPublic
     
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
@@ -71,41 +107,60 @@ struct UserJWT: JWTPayload {
     }
 }
 
-struct ChangePasswordRequest: Content {
+/// Wire name matches client `UpdatePasswordInfo` for BinaryCodable type headers.
+struct UpdatePasswordInfo: Content {
     let oldPassword: String
     let newPassword: String
+}
+
+@available(*, deprecated, renamed: "UpdatePasswordInfo")
+typealias ChangePasswordRequest = UpdatePasswordInfo
+
+/// Wire name matches client `UpdateProfileRequest` for BinaryCodable type headers.
+struct UpdateProfileRequest: Content {
+    let name: String?
+    let email: String?
 }
 
 actor UserController {
     // Create
     func register(req: Request) async throws -> UserPublic {
-        let register = try req.content.decode(RegisterRequest.self)
+        let register = try req.content.decode(RegisterInfo.self)
         guard register.email.contains("@"), register.password.count >= 8 else {
             throw Abort(.badRequest, reason: "Invalid email or password too short")
         }
         if try await req.store.findUser(byEmail: register.email.lowercased()) != nil {
             throw Abort(.conflict, reason: "User already exists")
         }
+        // Never trust client-supplied admin flags on open registration.
+        // Bootstrap: emails listed in ADMIN_USERNAMES may self-register as admin.
+        // Otherwise only an already-authenticated admin may create another admin.
+        var grantAdmin = AdminEnv.isListedAdmin(email: register.email)
+        if !grantAdmin, register.isAdmin {
+            if req.storage.get(IsAdminKey.self) == true {
+                grantAdmin = true
+            } else if let actor = req.storage.get(UserKey.self) {
+                grantAdmin = AdminEnv.isAdmin(user: actor, requestIsAdmin: true)
+            }
+        }
         let passwordHash = try await req.password.async.hash(register.password)
         let user = User(
             id: ObjectId().hexString,
             email: register.email.lowercased(),
             name: register.name,
-            isAdmin: register.isAdmin,
+            isAdmin: grantAdmin,
+            venueRole: grantAdmin ? .admin : .guest,
             passwordHash: passwordHash,
             symmetricKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }),
             createdAt: Date())
         try await req.store.createUser(user)
-        return UserPublic(
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            isAdmin: user.isAdmin)
+        try? await LoyaltyLedger.ensureAccount(req: req, userId: user.id)
+        return UserPublic.make(from: user)
     }
     
     // Login -> token + public user
     func login(req: Request) async throws -> TokenResponse {
-        let login = try req.content.decode(LoginRequest.self)
+        let login = try req.content.decode(LoginInfo.self)
         guard let user = try await req.store.findUser(byEmail: login.email.lowercased()) else {
             throw Abort(.unauthorized, reason: "Invalid credentials")
         }
@@ -115,7 +170,7 @@ actor UserController {
         let expirationDate = Date().addingTimeInterval(60 * 60 * 24)
         let payload = UserJWT(
             subject: .init(value: user.id), expiration: .init(value: expirationDate))
-        let token = try await req.jwt.sign(payload)
+        let token = try await req.jwt.sign(payload, kid: JWTConfiguration.mldsa87Kid)
         // Create and persist a refresh token, return as base64-encoded string
         let issuedAt = Date()
         let refreshExpiry = issuedAt.addingTimeInterval(60 * 60 * 24 * 30) // 30 days
@@ -136,14 +191,13 @@ actor UserController {
             token: token,
             refreshToken: refreshTokenB64,
             expiresAt: expirationDate,
-            user: UserPublic(id: user.id, email: user.email, name: user.name, isAdmin: user.isAdmin))
+            user: UserPublic.make(from: user))
     }
     
-    // Read list
+    // Read list (admin — People / role assignment)
     func list(req: Request) async throws -> UsersWrapper {
         let users = try await req.store.listUsers()
-        let publics = users.map { UserPublic(id: $0.id, email: $0.email, name: $0.name, isAdmin: $0.isAdmin) }
-        return UsersWrapper(items: publics)
+        return UsersWrapper(items: users.map { UserPublic.make(from: $0) })
     }
     
     // Read single
@@ -151,11 +205,50 @@ actor UserController {
         guard let id = req.parameters.get("id"), let user = try await req.store.findUser(byId: id) else {
             throw Abort(.notFound)
         }
-        return UserPublic(
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            isAdmin: user.isAdmin)
+        return UserPublic.make(from: user)
+    }
+
+    /// Admin assigns venue role + optional roster link.
+    func assignRole(req: Request) async throws -> UserPublic {
+        guard let id = req.parameters.get("id"), var user = try await req.store.findUser(byId: id)
+        else {
+            throw Abort(.notFound)
+        }
+        let body = try req.content.decode(AssignVenueRoleRequest.self)
+        if user.resolvedVenueRole == .admin || AdminEnv.isListedAdmin(email: user.email),
+           body.venueRole != .admin
+        {
+            let admins = try await req.store.listUsers().filter {
+                AdminEnv.isAdmin(user: $0) || $0.resolvedVenueRole == .admin
+            }
+            if admins.count <= 1 {
+                throw Abort(.conflict, reason: "Cannot demote the last admin")
+            }
+            if AdminEnv.isListedAdmin(email: user.email) {
+                throw Abort(.forbidden, reason: "ADMIN_USERNAMES bootstrap accounts stay admin")
+            }
+        }
+        if let raw = body.teamMemberId {
+            let link = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if link.isEmpty {
+                user.teamMemberId = nil
+            } else {
+                let roster = try await TeamController().list(req: req).items
+                guard roster.contains(where: { $0.id == link }) else {
+                    throw Abort(.badRequest, reason: "Unknown teamMemberId")
+                }
+                let taken = try await req.store.listUsers().contains {
+                    $0.id != user.id && $0.teamMemberId == link
+                }
+                if taken {
+                    throw Abort(.conflict, reason: "teamMemberId already linked to another user")
+                }
+                user.teamMemberId = link
+            }
+        }
+        user.applyVenueRole(body.venueRole)
+        let updated = try await req.store.updateUser(user)
+        return UserPublic.make(from: updated)
     }
     
     // Update (name/email only; not password)
@@ -168,23 +261,16 @@ actor UserController {
         else {
             throw Abort(.notFound)
         }
+        try requireSelfOrAdmin(req, userId: id)
         let body = try req.content.decode(UserUpdateRequest.self)
         if let email = body.email {
-            user = User(
-                id: user.id, email: email.lowercased(), name: user.name, isAdmin: user.isAdmin, passwordHash: user.passwordHash,
-                symmetricKey: user.symmetricKey, createdAt: user.createdAt)
+            user.email = email.lowercased()
         }
         if let name = body.name {
-            user = User(
-                id: user.id, email: user.email, name: name, isAdmin: user.isAdmin, passwordHash: user.passwordHash,
-                symmetricKey: user.symmetricKey, createdAt: user.createdAt)
+            user.name = name
         }
         let updated = try await req.store.updateUser(user)
-        return UserPublic(
-            id: updated.id,
-            email: updated.email,
-            name: updated.name,
-            isAdmin: updated.isAdmin)
+        return UserPublic.make(from: updated)
     }
     
     // Change password
@@ -193,7 +279,8 @@ actor UserController {
         else {
             throw Abort(.notFound)
         }
-        let request = try req.content.decode(ChangePasswordRequest.self)
+        try requireSelfOrAdmin(req, userId: id)
+        let request = try req.content.decode(UpdatePasswordInfo.self)
         guard try await req.password.async.verify(request.oldPassword, created: user.passwordHash)
         else {
             throw Abort(.unauthorized, reason: "Old password is incorrect")
@@ -203,7 +290,7 @@ actor UserController {
         let expirationDate = Date().addingTimeInterval(60 * 60 * 24)
         let payload = UserJWT(
             subject: .init(value: user.id), expiration: .init(value: expirationDate))
-        let token = try await req.jwt.sign(payload)
+        let token = try await req.jwt.sign(payload, kid: JWTConfiguration.mldsa87Kid)
         // Create and persist a refresh token, return as base64-encoded string
         let issuedAt = Date()
         let refreshExpiry = issuedAt.addingTimeInterval(60 * 60 * 24 * 30) // 30 days
@@ -224,11 +311,7 @@ actor UserController {
             token: token,
             refreshToken: refreshTokenB64,
             expiresAt: expirationDate,
-            user: UserPublic(
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                isAdmin: user.isAdmin))
+            user: UserPublic.make(from: user))
     }
     
     // Logout current user (invalidate refresh tokens)
@@ -240,18 +323,52 @@ actor UserController {
         return .ok
     }
     
+    /// Return the authenticated user's public profile (cold-start restore).
+    func me(req: Request) async throws -> UserPublic {
+        guard let user = req.storage.get(UserKey.self) else {
+            throw Abort(.unauthorized)
+        }
+        return UserPublic.make(from: user)
+    }
+
+    /// Update the authenticated user's display name / email.
+    func updateProfile(req: Request) async throws -> UserPublic {
+        guard var user = req.storage.get(UserKey.self) else {
+            throw Abort(.unauthorized)
+        }
+        let body = try req.content.decode(UpdateProfileRequest.self)
+        if let email = body.email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
+            let lower = email.lowercased()
+            if lower != user.email,
+               let existing = try await req.store.findUser(byEmail: lower),
+               existing.id != user.id
+            {
+                throw Abort(.conflict, reason: "Email already in use")
+            }
+            user.email = lower
+        }
+        if let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            user.name = name.isEmpty ? nil : name
+        }
+        let updated = try await req.store.updateUser(user)
+        return UserPublic.make(from: updated)
+    }
+
     // Update password for the authenticated user
-    struct UpdatePasswordRequest: Content { let oldPassword: String; let newPassword: String }
     func updatePassword(req: Request) async throws -> HTTPStatus {
         guard var user = req.storage.get(UserKey.self) else {
             throw Abort(.unauthorized)
         }
-        let payload = try req.content.decode(UpdatePasswordRequest.self)
+        let payload = try req.content.decode(UpdatePasswordInfo.self)
         guard try await req.password.async.verify(payload.oldPassword, created: user.passwordHash) else {
             throw Abort(.unauthorized, reason: "Old password is incorrect")
         }
         user.passwordHash = try await req.password.async.hash(payload.newPassword)
         try await req.store.updatePassword(user: user)
+        // Revoke all refresh sessions after credential change.
+        try await req.store.removeUserTokens(user)
+        try await req.store.deleteToken(
+            user.id, symmetricKey: SymmetricKey(data: user.symmetricKey))
         return .ok
     }
     
@@ -270,28 +387,55 @@ actor UserController {
         guard let id = req.parameters.get("id") else {
             throw Abort(.badRequest)
         }
+        try requireSelfOrAdmin(req, userId: id)
         try await req.store.deleteUser(id: id)
         return .noContent
     }
     
-    // Refresh access token
+    // Refresh access token using the encrypted refresh token from login (rotating).
     func refreshToken(req: Request) async throws -> TokenResponse {
-        let incoming = try await req.jwt.verify(as: UserJWT.self)
-        let newExp = Date().addingTimeInterval(60 * 60 * 24)
-        let newPayload = UserJWT(subject: incoming.subject, expiration: .init(value: newExp))
-        let token = try await req.jwt.sign(newPayload)
-        // Fetch user for convenience
-        guard let user = try await req.store.findUser(byId: incoming.subject.value) else {
-            throw Abort(.notFound)
+        guard let bearer = req.headers.bearerAuthorization,
+              let encrypted = Data(base64Encoded: bearer.token)
+        else {
+            throw Abort(.unauthorized, reason: "Missing refresh token")
         }
+        guard let user = try await req.store.findUser(refreshToken: encrypted) else {
+            throw Abort(.unauthorized, reason: "Invalid refresh token")
+        }
+        // Rotate: invalidate the presented refresh blob before issuing a replacement.
+        try await req.store.deleteRefreshToken(encrypted)
+
+        let newExp = Date().addingTimeInterval(60 * 60 * 24)
+        let newPayload = UserJWT(subject: .init(value: user.id), expiration: .init(value: newExp))
+        let token = try await req.jwt.sign(newPayload, kid: JWTConfiguration.mldsa87Kid)
+
+        let issuedAt = Date()
+        let refreshExpiry = issuedAt.addingTimeInterval(60 * 60 * 24 * 30)
+        let refreshRandom = (0..<32).map { _ in UInt8.random(in: 0...255) }
+        let refreshSecret = Data(refreshRandom).base64EncodedString()
+        let refresh = RefreshToken(
+            _id: user.id,
+            token: refreshSecret,
+            expiresAt: refreshExpiry,
+            issuedAt: issuedAt)
+        let encryptedRefresh = try await req.store.createRefreshToken(
+            refresh,
+            symmetricKey: SymmetricKey(data: user.symmetricKey))
+
         return TokenResponse(
             token: token,
-            refreshToken: nil,
+            refreshToken: encryptedRefresh.base64EncodedString(),
             expiresAt: newExp,
-            user: UserPublic(
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                isAdmin: user.isAdmin))
+            user: UserPublic.make(from: user))
+    }
+
+    private func requireSelfOrAdmin(_ req: Request, userId: String) throws {
+        guard let actor = req.storage.get(UserKey.self) else {
+            throw Abort(.unauthorized)
+        }
+        let isAdmin = req.storage.get(IsAdminKey.self) == true || actor.isAdmin
+        guard isAdmin || actor.id == userId else {
+            throw Abort(.forbidden, reason: "Not allowed to modify this user")
+        }
     }
 }

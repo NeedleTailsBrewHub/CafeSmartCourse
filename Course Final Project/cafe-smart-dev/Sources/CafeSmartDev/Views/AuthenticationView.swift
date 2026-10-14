@@ -25,57 +25,50 @@ struct AuthenticationView: View {
     @State var showRegistrationErrorAlert = false
     @FocusState var focusedField: Field?
     @Environment(\.dismiss) var dismiss
-    
-    
+
+#if os(Android)
+    private let emailIcon = "android_note"
+    private let lockIcon = "lock.fill"
+#else
+    private let emailIcon = "envelope.fill"
+    private let lockIcon = "lock.fill"
+#endif
+
     enum Field {
         case email, password, confirmedPassword
     }
-    
+
     var body: some View {
-        
         ScrollView {
             VStack(spacing: AppSpacing.lg) {
-                Spacer(minLength: AppSpacing.xl)
-                
-                // Centered header
+                Spacer(minLength: AppSpacing.lg)
+
                 VStack(spacing: AppSpacing.sm) {
-                    HStack {
-                        Spacer()
-                        Image("Logo", bundle: .module)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 150, height: 150)
-                            .clipShape(Circle())
-                            .padding()
-                        Spacer()
-                    }
-                    Text("CaféSmart")
-                        .font(AppFont.title())
+                    BrandAvatar(size: 96)
+                    Text("Create your account")
+                        .font(AppFont.title2())
                         .multilineTextAlignment(.center)
-                    Text("Where Every Cup’s a Clever Choice")
-                        .font(AppFont.subtitle())
+                    Text("Join your café workspace")
+                        .font(AppFont.subheadline())
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .padding(.horizontal, AppSpacing.lg)
-                
-                // Centered form
-                VStack(spacing: AppSpacing.md) {
-                    HStack(spacing: AppSpacing.sm) {
-                        Image(systemName: "envelope.fill")
-                            .foregroundStyle(.primary)
+
+                SurfacePanel {
+                    VStack(spacing: AppSpacing.md) {
                         AppTextField(
                             placeholder: "Email",
-                            text: $email)
+                            text: $email,
+                            leadingSystemImage: emailIcon
+                        )
+                        .focused($focusedField, equals: .email)
                         .onSubmit { focusedField = .password }
-                    }
-                    
-                    HStack(spacing: AppSpacing.sm) {
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.primary)
+
                         AppSecureField(
                             placeholder: "Password",
                             text: $password,
+                            leadingSystemImage: lockIcon,
                             showsRevealToggle: true
                         )
                         .textContentType(.newPassword)
@@ -84,13 +77,11 @@ struct AuthenticationView: View {
                         .onSubmit {
                             focusedField = .confirmedPassword
                         }
-                    }
-                    HStack(spacing: AppSpacing.sm) {
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.primary)
+
                         AppSecureField(
-                            placeholder: "Confirm Password",
+                            placeholder: "Confirm password",
                             text: $confirmedPassword,
+                            leadingSystemImage: lockIcon,
                             showsRevealToggle: true
                         )
                         .textContentType(.newPassword)
@@ -100,47 +91,50 @@ struct AuthenticationView: View {
                     }
                 }
                 .padding(.horizontal, AppSpacing.lg)
-                
-                // Space before CTA
-                Spacer(minLength: AppSpacing.xl)
-                
-                PrimaryButton(title: "Sign Up", systemImageName: nil, fillWidth: true) {
+
+                PrimaryButton(title: "Sign Up", fillWidth: true) {
                     signUp()
                 }
                 .disabled(!canSubmit)
                 .opacity(canSubmit ? 1 : 0.6)
                 .padding(.horizontal, AppSpacing.lg)
-                
-                Spacer()
-                
-                // Bottom footer centered
+
                 NavigationLink("Already have an account? Sign In") {
                     SignInView()
                 }
-                .font(.footnote.weight(.semibold))
+                .font(AppFont.footnote())
                 .padding(.bottom, AppSpacing.xl)
             }
-            .alert(Text(password.isEmpty ? "Passwords is empty" : "Email is empty"), isPresented: $showSignupErrorAlert){}
-            .alert("There was an error registering your account", isPresented: $showRegistrationErrorAlert){}
+            .frame(maxWidth: 480)
+            .frame(maxWidth: .infinity)
+            .alert(
+                Text(password.isEmpty ? "Password is empty" : "Enter a valid email"),
+                isPresented: $showSignupErrorAlert
+            ) {}
+            .alert("There was an error registering your account", isPresented: $showRegistrationErrorAlert) {}
         }
+        .background(Color.groupedBackgroundColor)
         .onChange(of: authenticationViewModel.didSignIn) { _, newValue in
             if newValue {
                 dismiss()
             }
         }
     }
-    
+
     private var canSubmit: Bool {
-        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !password.isEmpty
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty
+            && trimmed.contains("@")
+            && password.count > 8
+            && password == confirmedPassword
     }
-    
+
     private func signUp() {
-        if password != confirmedPassword || email.isEmpty, !email.contains("@"), password.count <= 8 {
+        guard canSubmit else {
             showSignupErrorAlert = true
             return
         }
-        
+
         Task {
             do {
                 try await authenticationViewModel.registration(email: email, password: password)

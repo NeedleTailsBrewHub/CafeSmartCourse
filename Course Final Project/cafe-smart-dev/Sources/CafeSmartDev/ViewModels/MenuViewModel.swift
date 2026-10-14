@@ -7,8 +7,7 @@
 
 import Observation
 import SkipFuseUI
-import BSON
-import JWTKit
+import BinaryCodable
 #if SKIP
 import SkipFoundation
 #else
@@ -61,7 +60,7 @@ final class MenuViewModel {
     }
 
     func createMenuItem(_ requestModel: CreateMenuItemRequest) async throws -> MenuItem {
-        let body = try BSONEncoder().encode(requestModel).makeData()
+        let body = try BinaryEncoder().encode(requestModel)
         let response: Response<MenuItem> = try await URLSession.shared.request(
             method: .post,
             httpHost: Constants.httpHost,
@@ -79,7 +78,7 @@ final class MenuViewModel {
     }
 
     func updateMenuItem(id: String, with requestModel: UpdateMenuItemRequest) async throws -> MenuItem {
-        let body = try BSONEncoder().encode(requestModel).makeData()
+        let body = try BinaryEncoder().encode(requestModel)
         let response: Response<MenuItem> = try await URLSession.shared.request(
             method: .put,
             httpHost: Constants.httpHost,

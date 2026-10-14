@@ -7,7 +7,7 @@
 import SkipFuse
 import Foundation
 import Observation
-import BSON
+import BinaryCodable
 
 enum Errors: Error {
     case failedRequest(Int), invalidData
@@ -18,6 +18,7 @@ enum Errors: Error {
 final class InventoryViewModel {
     
     var items: [InventoryItem] = []
+    var restockBySku: [String: RestockDecisionResponse] = [:]
     var isLoading: Bool = false
     var errorMessage: String?
     
@@ -58,7 +59,7 @@ final class InventoryViewModel {
     }
 
     func createInventoryItem(_ requestModel: CreateInventoryItemRequest) async throws -> InventoryItem {
-        let body = try BSONEncoder().encode(requestModel).makeData()
+        let body = try BinaryEncoder().encode(requestModel)
         let response: Response<InventoryItem> = try await URLSession.shared.request(
             method: .post,
             httpHost: Constants.httpHost,
@@ -75,7 +76,7 @@ final class InventoryViewModel {
     }
 
     func updateInventoryItem(id: String, with requestModel: UpdateInventoryItemRequest) async throws -> InventoryItem {
-        let body = try BSONEncoder().encode(requestModel).makeData()
+        let body = try BinaryEncoder().encode(requestModel)
         let response: Response<InventoryItem> = try await URLSession.shared.request(
             method: .put,
             httpHost: Constants.httpHost,
@@ -107,7 +108,11 @@ final class InventoryViewModel {
         }
         items.removeAll { $0.id == id }
     }
-    
-    
+
+    func applyRestockDecisions(_ decisions: [RestockDecisionResponse]) {
+        for decision in decisions {
+            restockBySku[decision.sku] = decision
+        }
+    }
 }
 

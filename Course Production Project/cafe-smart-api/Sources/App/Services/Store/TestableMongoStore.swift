@@ -25,12 +25,19 @@ public actor TestableMongoStore: MongoStore {
     private var orders: [Order] = []
     private var inventoryItems: [InventoryItem] = []
     private var menuItems: [MenuItem] = []
+    private var catalogMeta: CatalogMeta = CatalogMeta()
     private var reservations: [Reservation] = []
     private var recipes: [Recipe] = []
     private var seatingAreas: [SeatingArea] = []
     private var tables: [Table] = []
     private var businessConfig: BusinessConfig? = nil
     private var modelArtifacts: [MLModelArtifact] = []
+    private var trainJobs: [TrainJob] = []
+    private var tagGroups: [TagGroup] = []
+    private var tags: [Tag] = []
+    private var auditEvents: [AuditEvent] = []
+    private var supportTickets: [SupportTicket] = []
+    private var checkoutSessions: [CheckoutSession] = []
     
     // Refresh tokens stored with userId and expiry (no need to decrypt in tests)
     private struct StoredRefresh: Equatable {
@@ -49,41 +56,54 @@ public actor TestableMongoStore: MongoStore {
     public func listModelArtifacts() async throws -> [MLModelArtifact] { modelArtifacts }
     
     public func findModelArtifact(by id: String) async throws -> MLModelArtifact? {
-        guard let oid = ObjectId(id) else { return nil }
-        return modelArtifacts.first { $0._id == oid }
+        modelArtifacts.first { $0._id == id || $0.id == id }
     }
     
     public func setActiveModel(id: String) async throws {
-        guard let oid = ObjectId(id) else { return }
-        // Single active per kind: deactivate same kind, activate target
-        if let target = modelArtifacts.first(where: { $0._id == oid }) {
-            let kind = target.kind
-            modelArtifacts = modelArtifacts.map { item in
-                var m = item
-                if m.kind == kind { m.active = (m._id == oid) } else { /* keep as is */ }
-                return m
-            }
+        guard let target = modelArtifacts.first(where: { $0._id == id || $0.id == id }) else {
+            throw Abort(.notFound, reason: "Model artifact not found")
+        }
+        let kind = target.kind
+        modelArtifacts = modelArtifacts.map { item in
+            var m = item
+            if m.kind == kind { m.active = (m._id == target._id) }
+            return m
         }
     }
     
     public func deleteModelArtifact(id: String) async throws {
-        guard let oid = ObjectId(id) else { return }
-        modelArtifacts.removeAll { $0._id == oid }
+        if let art = modelArtifacts.first(where: { $0._id == id || $0.id == id }) {
+            try? FileManager.default.removeItem(atPath: art.storedAt)
+        }
+        modelArtifacts.removeAll { $0._id == id || $0.id == id }
+    }
+
+    public func upsertTrainJob(_ job: TrainJob) async throws {
+        trainJobs.removeAll { $0.id == job.id }
+        trainJobs.append(job)
+    }
+
+    public func findTrainJob(by id: String) async throws -> TrainJob? {
+        trainJobs.first { $0.id == id }
+    }
+
+    public func listTrainJobs(limit: Int) async throws -> [TrainJob] {
+        Array(trainJobs.sorted { $0.createdAt > $1.createdAt }.prefix(max(1, limit)))
+    }
+
+    public func pruneTrainJobs(keepLast: Int, maxAgeDays: Int) async throws {
+        _ = maxAgeDays
+        let sorted = trainJobs.sorted { $0.createdAt > $1.createdAt }
+        trainJobs = Array(sorted.prefix(max(1, keepLast)))
     }
     private var refreshTokens: [StoredRefresh] = []
     
     // MARK: Init
-    public init(seedDummyData: Bool = false) {
-        var shouldSeed = seedDummyData
-        let seedEnv = (
-            Environment.get("SEED_TEST_DATA")
-            ?? ""
-        ).lowercased()
-        if seedEnv == "true" {
-             shouldSeed = true 
-             }
+    public init(seedDummyData: Bool? = nil) {
+        // Explicit argument wins; otherwise honor DemoModePolicy (DEBUG + SEED_TEST_DATA).
+        let shouldSeed = seedDummyData ?? DemoModePolicy.isEnabled
         if shouldSeed {
-            let bundle = Self.makeDummyData()
+            let bundle = DemoCafeSeed.makeBundle()
             self.users = bundle.users
             self.inventoryItems = bundle.inventory
             self.menuItems = bundle.menu
@@ -93,6 +113,8 @@ public actor TestableMongoStore: MongoStore {
             self.reservations = bundle.reservations
             self.orders = bundle.orders
             self.businessConfig = bundle.config
+            self.tagGroups = bundle.tagGroups
+            self.tags = bundle.tags
         }
     }
     
@@ -137,6 +159,21 @@ public actor TestableMongoStore: MongoStore {
     }
     
     public func listOrders() async throws -> [Order] { orders }
+
+    public func listOrders(from: Date, to: Date) async throws -> [Order] {
+        orders.filter { $0.createdAt >= from && $0.createdAt < to }
+    }
+
+    public func pageOrders(filter: OrderListFilter) async throws -> PageResult<Order> {
+        let filtered = orders.filter { StoreListFilters.matchesOrder($0, filter: filter) }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortTimestamp($0.createdAt) },
+            id: \.id,
+            ascending: false)
+    }
     
     public func findOrder(by id: String) async throws -> Order? { orders.first { $0.id == id } }
     
@@ -161,6 +198,20 @@ public actor TestableMongoStore: MongoStore {
     public func listInventory() async throws -> [InventoryItem] {
         inventoryItems
     }
+
+    public func pageInventory(filter: InventoryListFilter) async throws -> PageResult<InventoryItem> {
+        let groupIds = StoreListFilters.groupTagIds(tags: tags, groupId: filter.tagGroupId)
+        let filtered = inventoryItems.filter {
+            StoreListFilters.matchesInventory($0, filter: filter, groupTagIds: groupIds)
+        }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortName($0.name) },
+            id: \.id,
+            ascending: true)
+    }
     
     public func findInventory(by id: String) async throws -> InventoryItem? {
         inventoryItems.first { $0.id == id }
@@ -175,7 +226,30 @@ public actor TestableMongoStore: MongoStore {
         return inventoryItem
     }
     
-    public func deleteInventory(id: String) async throws { inventoryItems.removeAll { $0.id == id } }
+    public func deleteInventory(id: String) async throws {
+        guard let idx = inventoryItems.firstIndex(where: { $0.id == id }) else { return }
+        inventoryItems[idx].deletedAt = Date()
+    }
+
+    public func deductInventory(bySKU requirements: [String: Int]) async throws {
+        for (sku, units) in requirements where units > 0 {
+            guard let idx = inventoryItems.firstIndex(where: {
+                $0.sku == sku && $0.deletedAt == nil
+            }) else {
+                throw Abort(.badRequest, reason: "Missing inventory for SKU \(sku)")
+            }
+            let have = inventoryItems[idx].quantity
+            guard have >= units else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Insufficient stock for \(inventoryItems[idx].name) (need \(units), have \(have))"
+                )
+            }
+            inventoryItems[idx].quantity = have - units
+            inventoryItems[idx].updatedAt = Date()
+        }
+    }
     
     // MARK: Menu
     public func create(menuItem: MenuItem) async throws -> MenuItem {
@@ -185,6 +259,20 @@ public actor TestableMongoStore: MongoStore {
     }
     
     public func listMenu() async throws -> [MenuItem] { menuItems }
+
+    public func pageMenu(filter: MenuListFilter) async throws -> PageResult<MenuItem> {
+        let groupIds = StoreListFilters.groupTagIds(tags: tags, groupId: filter.tagGroupId)
+        let filtered = menuItems.filter {
+            StoreListFilters.matchesMenu($0, filter: filter, groupTagIds: groupIds)
+        }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortName($0.name) },
+            id: \.id,
+            ascending: true)
+    }
     
     public func findMenuItem(by id: String) async throws -> MenuItem? {
         menuItems.first { $0.id == id }
@@ -199,7 +287,18 @@ public actor TestableMongoStore: MongoStore {
         return menuItem
     }
     
-    public func deleteMenuItem(id: String) async throws { menuItems.removeAll { $0.id == id } }
+    public func deleteMenuItem(id: String) async throws {
+        guard let idx = menuItems.firstIndex(where: { $0.id == id }) else { return }
+        menuItems[idx].deletedAt = Date()
+    }
+
+    public func getCatalogMeta() async throws -> CatalogMeta { catalogMeta }
+
+    public func bumpCatalogVersion() async throws -> CatalogMeta {
+        catalogMeta.version += 1
+        catalogMeta.updatedAt = Date()
+        return catalogMeta
+    }
     
     // MARK: Reservations
     public func create(reservation: Reservation) async throws -> Reservation {
@@ -209,9 +308,32 @@ public actor TestableMongoStore: MongoStore {
     }
     
     public func listReservations() async throws -> [Reservation] { reservations }
+
+    public func listReservations(from: Date, to: Date) async throws -> [Reservation] {
+        reservations.filter { $0.startTime >= from && $0.startTime < to }
+    }
+
+    public func pageReservations(filter: ReservationListFilter) async throws -> PageResult<Reservation> {
+        let filtered = reservations.filter { StoreListFilters.matchesReservation($0, filter: filter) }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortTimestamp($0.startTime) },
+            id: \.id,
+            ascending: true)
+    }
     
     public func findReservation(by id: String) async throws -> Reservation? {
         reservations.first { $0.id == id }
+    }
+
+    public func update(reservation: Reservation) async throws -> Reservation {
+        guard let idx = reservations.firstIndex(where: { $0.id == reservation.id }) else {
+            throw Abort(.notFound)
+        }
+        reservations[idx] = reservation
+        return reservation
     }
     
     public func deleteReservation(id: String) async throws { reservations.removeAll { $0.id == id } }
@@ -231,9 +353,14 @@ public actor TestableMongoStore: MongoStore {
     
     public func findUser(refreshToken: Data) async throws -> User? {
         if let stored = refreshTokens.first(where: { $0.data == refreshToken }) {
+            guard stored.expiresAt >= Date() else { return nil }
             return try await findUser(byId: stored.userId)
         }
         return nil
+    }
+
+    public func deleteRefreshToken(_ data: Data) async throws {
+        refreshTokens.removeAll { $0.data == data }
     }
     
     public func cleanupExpiredTokens() async throws {
@@ -343,317 +470,201 @@ public actor TestableMongoStore: MongoStore {
         businessConfig
     }
     
-    // MARK: - Seeding
-    private struct SeedBundle {
-        let users: [User]
-        let inventory: [InventoryItem]
-        let menu: [MenuItem]
-        let recipes: [Recipe]
-        let areas: [SeatingArea]
-        let tables: [Table]
-        let reservations: [Reservation]
-        let orders: [Order]
-        let config: BusinessConfig
+    public func purgeDemoData() async throws {
+        orders = []
+        inventoryItems = []
+        menuItems = []
+        catalogMeta = CatalogMeta()
+        reservations = []
+        recipes = []
+        seatingAreas = []
+        tables = []
+        businessConfig = nil
+        tagGroups = []
+        tags = []
+        auditEvents = []
+        supportTickets = []
+        checkoutSessions = []
+        // Keep users, refresh tokens, and ML artifacts.
     }
-    
-    private static func makeDummyData() -> SeedBundle {
-        let now = Date()
-        
-        // Users
-        let adminId = ObjectId().hexString
-        let userId = ObjectId().hexString
-        let adminHash: String = (try? Bcrypt.hash("AdminPass123!")) ?? "$2b$12$H1Jg3b7xFQwN4k4ZlQp2xOUxJqzq0vWbQe7j8dQ8d2oT6i6vL2U9y"
-        let userHash: String = (try? Bcrypt.hash("UserPass123!")) ?? "$2b$12$H1Jg3b7xFQwN4k4ZlQp2xOUxJqzq0vWbQe7j8dQ8d2oT6i6vL2U9y"
-        let admin = User(
-            id: adminId,
-            email: "admin@cafesmart.test",
-            name: "Cafe Admin",
-            isAdmin: true,
-            passwordHash: adminHash,
-            symmetricKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }),
-            createdAt: now.addingTimeInterval(-86400)
-        )
-        let regular = User(
-            id: userId,
-            email: "jane.doe@cafesmart.test",
-            name: "Jane Doe",
-            isAdmin: false,
-            passwordHash: userHash,
-            symmetricKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }),
-            createdAt: now.addingTimeInterval(-43200)
-        )
-        let users = [admin, regular]
-        
-        // Inventory
-        var invBeans = InventoryItem(
-            id: ObjectId().hexString, sku: "BEANS-ESP-1KG", name: "Espresso Beans 1kg", quantity: 4,
-            reorderThreshold: 5, unit: "bag", supplier: "Roasters Inc.")
-        // Configure optional fields for variety
-        invBeans.leadTimeDays = 3 // onHand(4) <= safety(5) even without forecast => restock
-        var invMilk = InventoryItem(
-            id: ObjectId().hexString, sku: "DAIRY-MILK-1L", name: "Whole Milk 1L", quantity: 60,
-            reorderThreshold: 15, unit: "carton", supplier: "Local Dairy")
-        invMilk.storage = .refrigerated
-        invMilk.shelfLifeDays = 10
-        invMilk.leadTimeDays = 2 // ROP smaller; onHand stays high => no restock
-        let invCroissant = InventoryItem(
-            id: ObjectId().hexString, sku: "BAKERY-DOUGH-CROIS", name: "Croissant Dough", quantity: 200,
-            reorderThreshold: 50, unit: "unit", supplier: "Bakery Supply")
-        let invSugar = InventoryItem(
-            id: ObjectId().hexString, sku: "SWEET-SUGAR-1KG", name: "Granulated Sugar 1kg", quantity: 30,
-            reorderThreshold: 5, unit: "bag", supplier: "Sweet Co.")
-        let inventory = [invBeans, invMilk, invCroissant, invSugar]
-        
-        // Menu
-        let espressoId = ObjectId().hexString
-        var espresso = MenuItem(
-            id: espressoId, name: "Espresso", description: "Rich shot of espresso",
-            priceCents: 300, isAvailable: true, category: "Coffee", createdAt: now.addingTimeInterval(-7200)
-        )
-        espresso.prepSeconds = 60
-        espresso.prepStation = "Barista"
-        
-        let cappuccinoId = ObjectId().hexString
-        var cappuccino = MenuItem(
-            id: cappuccinoId, name: "Cappuccino", description: "Espresso with steamed milk and foam",
-            priceCents: 450, isAvailable: true, category: "Coffee", createdAt: now.addingTimeInterval(-7000)
-        )
-        cappuccino.prepSeconds = 180
-        cappuccino.prepStation = "Barista"
-        cappuccino.allergens = [.milk]
-        cappuccino.sizeOptions = [
-            .init(name: "Small", priceDeltaCents: 0),
-            .init(name: "Medium", priceDeltaCents: 50),
-            .init(name: "Large", priceDeltaCents: 100),
-        ]
-        
-        let croissantId = ObjectId().hexString
-        var croissant = MenuItem(
-            id: croissantId, name: "Butter Croissant", description: "Flaky French pastry",
-            priceCents: 350, isAvailable: true, category: "Bakery", createdAt: now.addingTimeInterval(-6800)
-        )
-        croissant.prepSeconds = 600
-        croissant.prepStation = "Bakery"
-        croissant.allergens = [.gluten, .milk]
-        
-        let menu = [espresso, cappuccino, croissant]
-        
-        // Recipes (tie to inventory SKUs)
-        let recipeEspresso = Recipe(
-            id: ObjectId().hexString,
-            menuItemId: espressoId,
-            components: [
-                .init(sku: invBeans.sku, unitsPerItem: 0.018, wastageRate: 0.02),
-                .init(sku: invSugar.sku, unitsPerItem: 0.0),
-            ],
-            createdAt: now
-        )
-        let recipeCappuccino = Recipe(
-            id: ObjectId().hexString,
-            menuItemId: cappuccinoId,
-            components: [
-                .init(sku: invBeans.sku, unitsPerItem: 0.018, wastageRate: 0.02),
-                .init(sku: invMilk.sku, unitsPerItem: 0.2, wastageRate: 0.05),
-                .init(sku: invSugar.sku, unitsPerItem: 0.005),
-            ],
-            createdAt: now
-        )
-        let recipeCroissant = Recipe(
-            id: ObjectId().hexString,
-            menuItemId: croissantId,
-            components: [
-                .init(sku: invCroissant.sku, unitsPerItem: 1.0, wastageRate: 0.03),
-            ],
-            createdAt: now
-        )
-        let recipes = [recipeEspresso, recipeCappuccino, recipeCroissant]
-        
-        // Seating Areas and Tables
-        let mainAreaId = ObjectId().hexString
-        let patioAreaId = ObjectId().hexString
-        let main = SeatingArea(id: mainAreaId, name: "Main Hall", defaultTurnMinutes: 60, active: true)
-        let patio = SeatingArea(id: patioAreaId, name: "Patio", defaultTurnMinutes: 75, active: true)
-        let areas = [main, patio]
-        
-        let t1 = Table(id: ObjectId().hexString, areaId: mainAreaId, name: "T1", capacity: 2, accessible: true, highTop: false, outside: false, active: true)
-        let t2 = Table(id: ObjectId().hexString, areaId: mainAreaId, name: "T2", capacity: 4, accessible: false, highTop: false, outside: false, active: true)
-        let t3 = Table(id: ObjectId().hexString, areaId: patioAreaId, name: "P1", capacity: 4, accessible: true, highTop: false, outside: true, active: true)
-        let tables = [t1, t2, t3]
-        
-        // Reservations
-        let res1Id = ObjectId().hexString
-        var res1 = Reservation(
-            id: res1Id,
-            name: "Jane Doe",
-            partySize: 2,
-            startTime: now.addingTimeInterval(3600),
-            phone: "+1-555-111-2222",
-            notes: "Window seat"
-        )
-        res1.durationMinutes = 90
-        res1.areaId = mainAreaId
-        res1.tableId = t1.id
-        res1.status = .active
-        
-        let res2Id = ObjectId().hexString
-        var res2 = Reservation(
-            id: res2Id,
-            name: "John Smith",
-            partySize: 4,
-            startTime: now.addingTimeInterval(7200),
-            phone: "+1-555-333-4444",
-            notes: nil
-        )
-        res2.durationMinutes = 120
-        res2.areaId = patioAreaId
-        res2.tableId = t3.id
-        res2.status = .active
-        
-        var reservations = [res1, res2]
-        
-        // Orders (reference menu items and optionally reservation)
-        let order1 = Order(
-            id: ObjectId().hexString,
-            status: .pending,
-            customerName: "Jane Doe",
-            items: [
-                .init(menuItemId: espressoId, quantity: 1, notes: "Ristretto"),
-                .init(menuItemId: croissantId, quantity: 2, notes: nil),
-            ],
-            pickupTime: nil,
-            createdAt: now.addingTimeInterval(-1800)
-        )
-        var order1Extended = order1
-        order1Extended.channel = .dineIn
-        order1Extended.serviceType = .barista
-        order1Extended.tableId = t1.id
-        order1Extended.guests = 2
-        order1Extended.reservationId = res1Id
-        
-        var order2 = Order(
-            id: ObjectId().hexString,
-            status: .preparing,
-            customerName: "Walk-in",
-            items: [
-                .init(menuItemId: cappuccinoId, quantity: 2, notes: "Oat milk if available"),
-            ],
-            pickupTime: now.addingTimeInterval(900),
-            createdAt: now.addingTimeInterval(-600)
-        )
-        order2.channel = .takeaway
-        order2.serviceType = .barista
-        
-        var orders = [order1Extended, order2]
+}
 
-        // Generate historical orders and reservations to power CSV datasets
-        let calendar = Calendar(identifier: .gregorian)
-        let daysBack: Int = {
-            if let raw = Environment.get("DUMMY_DAYS_BACK"), let v = Int(raw), v > 0 { return v }
-            return 180 // default ~6 months
-        }()
-        if let start = calendar.date(byAdding: .day, value: -daysBack, to: now) {
-            let menuIds = [espressoId, cappuccinoId, croissantId]
-            let tableIds = [t1.id, t2.id, t3.id]
-            let areaIds = [mainAreaId, patioAreaId]
-            for d in 0...daysBack {
-                guard let dayDate = calendar.date(byAdding: .day, value: d, to: start) else { continue }
-                let weekday = calendar.component(.weekday, from: dayDate)
-                let baseDemand: Double = (weekday == 1 || weekday == 7) ? 1.2 : 1.0
-                let baseMin: Int = Int(Environment.get("DUMMY_BASE_ORDERS_MIN") ?? "") ?? 4
-                let baseMax: Int = Int(Environment.get("DUMMY_BASE_ORDERS_MAX") ?? "") ?? 10
-                let maxItemsPerOrder: Int = max(1, Int(Environment.get("DUMMY_MAX_ITEMS_PER_ORDER") ?? "") ?? 3)
-                for hour in 7...20 { // business hours 7am-8pm
-                    let hourDate = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: dayDate) ?? dayDate
-                    let rush: Double = (
-                        (7...9).contains(hour) ? 1.6 : (
-                            (12...13).contains(hour) ? 1.5 : (
-                                (17...19).contains(hour) ? 1.4 : 0.8
-                            )
-                        )
-                    )
-                    let baseRandom = max(baseMin, min(baseMax, Int.random(in: baseMin...max(baseMin, baseMax))))
-                    let ordersThisHour = max(0, Int(Double(baseRandom) * baseDemand * rush))
-                    for _ in 0..<ordersThisHour {
-                        let oid = ObjectId().hexString
-                        let status: OrderStatus = [.completed, .preparing, .ready].randomElement() ?? .completed
-                        var itemsList: [OrderItem] = []
-                        let itemCount = 1 + Int.random(in: 0...max(0, maxItemsPerOrder - 1))
-                        for _ in 0..<itemCount {
-                            let mid = menuIds.randomElement() ?? espressoId
-                            let qty = 1 + Int.random(in: 0...2)
-                            itemsList.append(OrderItem(menuItemId: mid, quantity: qty, notes: nil))
-                        }
-                        let createdAt = hourDate.addingTimeInterval(TimeInterval(Int.random(in: 0...3599)))
-                        var ord = Order(
-                            id: oid,
-                            status: status,
-                            customerName: ["Alice","Bob","Carol","Dave","Erin","Frank"].randomElement(),
-                            items: itemsList,
-                            pickupTime: nil,
-                            createdAt: createdAt
-                        )
-                        ord.channel = [.dineIn, .takeaway, .pickup, .delivery].randomElement()
-                        ord.serviceType = [.barista, .kitchen, .bakery].randomElement()
-                        if ord.channel == .dineIn {
-                            ord.tableId = tableIds.randomElement()
-                            ord.guests = [1,2,3,4].randomElement()
-                        }
-                        orders.append(ord)
-                    }
-                    // Reservations during lunch/dinner windows
-                    if (11...13).contains(hour) || (17...20).contains(hour) {
-                        let resCount = Int.random(in: 0...5)
-                        for _ in 0..<resCount {
-                            let rid = ObjectId().hexString
-                            let startTime = hourDate.addingTimeInterval(TimeInterval(Int.random(in: 0...1800)))
-                            var res = Reservation(
-                                id: rid,
-                                name: ["Jane","John","Alex","Sam","Taylor","Riley"].randomElement() ?? "Guest",
-                                partySize: 2 + Int.random(in: 0...4),
-                                startTime: startTime,
-                                phone: nil,
-                                notes: nil
-                            )
-                            res.durationMinutes = [60,75,90,120].randomElement()
-                            res.areaId = areaIds.randomElement()
-                            res.tableId = tableIds.randomElement()
-                            res.status = [.active, .completed].randomElement()
-                            reservations.append(res)
-                        }
-                    }
-                }
-            }
+// MARK: - Tag taxonomy + audit (TestableMongoStore)
+
+extension TestableMongoStore {
+    public func createTagGroup(_ group: TagGroup) async throws -> TagGroup {
+        tagGroups.removeAll { $0.id == group.id }
+        tagGroups.append(group)
+        return group
+    }
+
+    public func updateTagGroup(_ group: TagGroup) async throws -> TagGroup {
+        if let idx = tagGroups.firstIndex(where: { $0.id == group.id }) {
+            tagGroups[idx] = group
+        } else {
+            tagGroups.append(group)
         }
-        
-        // Business Config
-        let hours: [BusinessHours] = [
-            .init(weekday: 1, open: "07:00", close: "19:00"),
-            .init(weekday: 2, open: "07:00", close: "19:00"),
-            .init(weekday: 3, open: "07:00", close: "19:00"),
-            .init(weekday: 4, open: "07:00", close: "19:00"),
-            .init(weekday: 5, open: "07:00", close: "21:00"),
-            .init(weekday: 6, open: "08:00", close: "21:00"),
-            .init(weekday: 7, open: "08:00", close: "17:00"),
-        ]
-        let staffing = StaffingRules(ordersPerBaristaPerHour: 40, ordersPerBakerPerHour: 25, guestsPerHostPerHour: 60)
-        let config = BusinessConfig(
-            id: ObjectId().hexString,
-            timezone: "America/Los_Angeles",
-            hours: hours,
-            seatingCapacity: 60,
-            staffing: staffing
-        )
-        
-        return SeedBundle(
-            users: users,
-            inventory: inventory,
-            menu: menu,
-            recipes: recipes,
-            areas: areas,
-            tables: tables,
-            reservations: reservations,
-            orders: orders,
-            config: config
-        )
+        return group
+    }
+
+    public func findTagGroup(by id: String) async throws -> TagGroup? {
+        tagGroups.first { $0.id == id }
+    }
+
+    public func listTagGroups() async throws -> [TagGroup] { tagGroups }
+
+    public func pageTagGroups(filter: TagGroupListFilter) async throws -> PageResult<TagGroup> {
+        let filtered = tagGroups.filter { StoreListFilters.matchesTagGroup($0, filter: filter) }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortInt($0.sortOrder) },
+            id: \.id,
+            ascending: true)
+    }
+
+    public func archiveTagGroup(id: String, at: Date) async throws {
+        guard let idx = tagGroups.firstIndex(where: { $0.id == id }) else {
+            throw Abort(.notFound)
+        }
+        tagGroups[idx].isArchived = true
+        tagGroups[idx].updatedAt = at
+        for i in tags.indices where tags[i].groupId == id {
+            tags[i].isArchived = true
+            tags[i].updatedAt = at
+        }
+    }
+
+    public func createTag(_ tag: Tag) async throws -> Tag {
+        tags.removeAll { $0.id == tag.id }
+        tags.append(tag)
+        return tag
+    }
+
+    public func updateTag(_ tag: Tag) async throws -> Tag {
+        if let idx = tags.firstIndex(where: { $0.id == tag.id }) {
+            tags[idx] = tag
+        } else {
+            tags.append(tag)
+        }
+        return tag
+    }
+
+    public func findTag(by id: String) async throws -> Tag? {
+        tags.first { $0.id == id }
+    }
+
+    public func findTags(by ids: [String]) async throws -> [Tag] {
+        let wanted = Set(ids)
+        return tags.filter { wanted.contains($0.id) }
+    }
+
+    public func listTags() async throws -> [Tag] { tags }
+
+    public func pageTags(filter: TagListFilter) async throws -> PageResult<Tag> {
+        let filtered = tags.filter { StoreListFilters.matchesTag($0, filter: filter) }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortInt($0.sortOrder) },
+            id: \.id,
+            ascending: true)
+    }
+
+    public func archiveTag(id: String, at: Date) async throws {
+        guard let idx = tags.firstIndex(where: { $0.id == id }) else {
+            throw Abort(.notFound)
+        }
+        tags[idx].isArchived = true
+        tags[idx].updatedAt = at
+    }
+
+    public func createAuditEvent(_ event: AuditEvent) async throws {
+        auditEvents.append(event)
+    }
+
+    public func pageAuditEvents(filter: AuditListFilter) async throws -> PageResult<AuditEvent> {
+        let filtered = auditEvents.filter { StoreListFilters.matchesAudit($0, filter: filter) }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortTimestamp($0.createdAt) },
+            id: \.id,
+            ascending: false)
+    }
+
+    // MARK: Support tickets
+    public func create(supportTicket: SupportTicket) async throws -> SupportTicket {
+        supportTickets.removeAll { $0.id == supportTicket.id }
+        supportTickets.append(supportTicket)
+        return supportTicket
+    }
+
+    public func findSupportTicket(by id: String) async throws -> SupportTicket? {
+        supportTickets.first { $0.id == id }
+    }
+
+    public func pageSupportTickets(filter: SupportTicketListFilter) async throws -> PageResult<SupportTicket> {
+        let filtered = supportTickets.filter {
+            StoreListFilters.matchesSupportTicket($0, filter: filter)
+        }
+        return try ListPagination.page(
+            filtered,
+            limit: filter.limit,
+            cursor: filter.cursor,
+            sortKey: { StoreListFilters.sortTimestamp($0.createdAt) },
+            id: \.id,
+            ascending: false)
+    }
+
+    public func update(supportTicket: SupportTicket) async throws -> SupportTicket {
+        if let idx = supportTickets.firstIndex(where: { $0.id == supportTicket.id }) {
+            supportTickets[idx] = supportTicket
+        } else {
+            supportTickets.append(supportTicket)
+        }
+        return supportTicket
+    }
+
+    public func deleteSupportTicket(id: String) async throws {
+        supportTickets.removeAll { $0.id == id }
+    }
+
+    // MARK: Checkout sessions
+
+    public func create(checkoutSession: CheckoutSession) async throws -> CheckoutSession {
+        checkoutSessions.removeAll { $0.id == checkoutSession.id }
+        checkoutSessions.append(checkoutSession)
+        return checkoutSession
+    }
+
+    public func findCheckoutSession(by id: String) async throws -> CheckoutSession? {
+        checkoutSessions.first { $0.id == id }
+    }
+
+    public func findCheckoutSession(byPaymentIntentId paymentIntentId: String) async throws
+        -> CheckoutSession?
+    {
+        checkoutSessions.first { $0.paymentIntentId == paymentIntentId }
+    }
+
+    public func update(checkoutSession: CheckoutSession) async throws -> CheckoutSession {
+        if let idx = checkoutSessions.firstIndex(where: { $0.id == checkoutSession.id }) {
+            checkoutSessions[idx] = checkoutSession
+        } else {
+            checkoutSessions.append(checkoutSession)
+        }
+        return checkoutSession
+    }
+
+    public func claimCheckoutSessionForFulfillment(id: String) async throws -> CheckoutSession? {
+        guard let idx = checkoutSessions.firstIndex(where: { $0.id == id }),
+            checkoutSessions[idx].status == .pending
+        else { return nil }
+        checkoutSessions[idx].status = .fulfilling
+        return checkoutSessions[idx]
     }
 }

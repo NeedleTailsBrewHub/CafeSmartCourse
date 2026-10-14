@@ -8,7 +8,7 @@ import Foundation
 import Observation
 import SkipFuse
 import SkipKeychain
-import BSON
+import BinaryCodable
 import ConnectionManagerKit
 
 struct RegistrationInfo: Codable {
@@ -18,13 +18,15 @@ struct RegistrationInfo: Codable {
     let isAdmin: Bool
 }
 
-struct User: Codable {
+/// Matches API wire type `UserPublic` for BinaryCodable type headers.
+struct UserPublic: Codable {
     let id: String
     let email: String
     let name: String?
-    let role: String?
     let isAdmin: Bool
 }
+
+typealias User = UserPublic
 
 struct LoginInfo: Codable, Sendable, Equatable {
     let email: String
@@ -55,10 +57,10 @@ final class AuthenticationViewModel {
             email: email,
             password: password,
             name: email,
-            isAdmin: true
+            isAdmin: false
         )
         
-        let body = try BSONEncoder().encode(registration).makeData()
+        let body = try BinaryEncoder().encode(registration)
         let response: Response<User> = try await URLSession.shared.request(
             method: .post,
             httpHost: Constants.httpHost,
@@ -75,7 +77,7 @@ final class AuthenticationViewModel {
     func login(email: String, password: String) async throws {
         let info = LoginInfo(email: email, password: password)
         
-        let body = try BSONEncoder().encode(info).makeData()
+        let body = try BinaryEncoder().encode(info)
         let response: Response<TokenResponse> = try await URLSession.shared.request(
             method: .post,
             httpHost: Constants.httpHost,
@@ -93,49 +95,57 @@ final class AuthenticationViewModel {
         }
         
         user = token.user
-        try keychain.set(token.token, forKey: "com.example.app.access-token")
-        if let refreshToken = token.refreshToken {
-            try keychain.set(refreshToken, forKey: "com.example.app.refresh-token")
-        }
+        await URLSession.persistSession(accessToken: token.token, refreshToken: token.refreshToken)
         self.didSignIn = true
+        try await connectMerchantWebSocketIfAdmin(accessToken: token.token)
+    }
+
+    func refreshToken() async throws {
+        guard let refreshToken = await URLSession.AuthTokenStore.shared.getRefreshToken() else {
+            throw Errors.invalidData
+        }
+        let response: Response<Data> = try await URLSession.shared.request(
+            method: .post,
+            httpHost: Constants.httpHost,
+            url: "api/auth/refresh",
+            headers: ["Authorization": "Bearer \(refreshToken)"],
+            token: nil)
         
-        try await WebSocketClient.shared.connect(
-            host: Constants.wsHost,
-            route: "/api/ws/merchant",
-            headers: .init([("Authorization", "Bearer \(token.token)")]))
+        let httpResponse = response.urlResponse as! HTTPURLResponse
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw Errors.failedRequest(httpResponse.statusCode)
+        }
         
-        try await Task.sleep(until: .now + .seconds(2))
-        
-        try await WebSocketClient.shared.sendPing("ping_data".data(using: .utf8)!, to: "/api/auth/ws/merchant")
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-//        try await WebSocketClient.shared.connect(
-//            host: Constants.wsHost,
-//            route: "/api/auth/ws/merchant",
-//            headers: .init([("Authorization", "Bearer \(token.token)")]))
-//        try await Task.sleep(until: .now + .seconds(2))
-//        try await WebSocketClient.shared.sendPing("ping_data".data(using: .utf8)!, to: "/api/auth/ws/merchant")
-        
+        guard let data = response.data else {
+            throw Errors.invalidData
+        }
+        let decoded = try BinaryDecoder().decode(TokenResponse.self, from: data)
+        self.user = decoded.user
+        await URLSession.persistSession(accessToken: decoded.token, refreshToken: decoded.refreshToken)
+    }
+
+    /// Cold start: refresh keychain session and reconnect admin merchant WS when applicable.
+    func restoreSessionIfNeeded() async {
+        guard await URLSession.AuthTokenStore.shared.getRefreshToken() != nil else { return }
+        do {
+            try await refreshToken()
+            didSignIn = true
+            if let access = await URLSession.AuthTokenStore.shared.getAccessToken() {
+                try await connectMerchantWebSocketIfAdmin(accessToken: access)
+            }
+        } catch {
+            logger.info("Session restore failed: \(error)")
+            signOut()
+        }
     }
 
     func signOut() {
-        try? keychain.removeValue(forKey: "com.example.app.access-token")
-        try? keychain.removeValue(forKey: "com.example.app.refresh-token")
         user = nil
         didSignIn = false
+        Task {
+            await URLSession.AuthTokenStore.shared.clear()
+            await WebSocketClient.shared.disconnect(Constants.wsMerchantRoute)
+        }
     }
     
     func updatePassword(
@@ -144,7 +154,7 @@ final class AuthenticationViewModel {
         newPassword: String
     ) async throws {
         let payload = UpdatePasswordInfo(oldPassword: oldPassword, newPassword: newPassword)
-        let body = try BSONEncoder().encode(payload).makeData()
+        let body = try BinaryEncoder().encode(payload)
         let response: Response<TokenResponse> = try await URLSession.shared.request(
             method: .put,
             httpHost: Constants.httpHost,
@@ -160,15 +170,30 @@ final class AuthenticationViewModel {
             throw Errors.invalidData
         }
         self.user = token.user
-        try keychain.set(token.token, forKey: "com.example.app.access-token")
-        if let refreshToken = token.refreshToken {
-            try keychain.set(refreshToken, forKey: "com.example.app.refresh-token")
-        }
+        await URLSession.persistSession(accessToken: token.token, refreshToken: token.refreshToken)
         self.didSignIn = true
     }
     
     func deleteAccountLocally() {
         signOut()
+    }
+
+    private func connectMerchantWebSocketIfAdmin(accessToken: String) async throws {
+        guard user?.isAdmin == true else { return }
+        try await WebSocketClient.shared.connect(
+            host: Constants.wsHost,
+            port: Constants.wsPort,
+            enableTLS: Constants.wsEnableTLS,
+            route: Constants.wsMerchantRoute,
+            headers: .init([("Authorization", "Bearer \(accessToken)")]))
+        let auth = WSAuthPacket(token: accessToken, topic: "merchant")
+        try await WebSocketClient.shared.sendBinary(
+            BinaryEncoder().encode(auth),
+            to: Constants.wsMerchantRoute)
+        try await Task.sleep(until: .now + .seconds(1))
+        try await WebSocketClient.shared.sendPing(
+            "ping_data".data(using: .utf8)!,
+            to: Constants.wsMerchantRoute)
     }
     
 }

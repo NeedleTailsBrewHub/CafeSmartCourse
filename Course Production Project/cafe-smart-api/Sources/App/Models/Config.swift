@@ -13,7 +13,6 @@
 //  This file is part of the CafeSmartAPI Project
 
 import Vapor
-import BSON
 
 public struct BusinessHours: Codable, Sendable, Equatable {
 	public var weekday: Int
@@ -27,17 +26,67 @@ public struct StaffingRules: Codable, Sendable, Equatable {
 	public var guestsPerHostPerHour: Int
 }
 
-public struct BusinessConfig: Content, Sendable, Equatable, BSONResponseEncodable {
+/// Admin-controlled reservation inventory and offered times.
+public struct ReservationBookingSettings: Codable, Sendable, Equatable {
+	/// When false, guests see no bookable slots.
+	public var enabled: Bool
+	/// How many tables may be reserved at once (concurrent inventory).
+	public var tablesAvailable: Int
+	/// Default seats per table when inventory is virtual (no seating map).
+	public var defaultPartyCapacity: Int
+	/// Spacing between offered starts when `slotStarts` is empty (15 / 30 / 60).
+	public var slotIntervalMinutes: Int
+	/// Held duration for each booking / turn time.
+	public var turnMinutes: Int
+	/// Explicit start times as `"HH:mm"`. Empty → generate from open hours + interval.
+	public var slotStarts: [String]
+
+	public init(
+		enabled: Bool = true,
+		tablesAvailable: Int = 8,
+		defaultPartyCapacity: Int = 4,
+		slotIntervalMinutes: Int = 30,
+		turnMinutes: Int = 90,
+		slotStarts: [String] = []
+	) {
+		self.enabled = enabled
+		self.tablesAvailable = max(0, tablesAvailable)
+		self.defaultPartyCapacity = max(1, defaultPartyCapacity)
+		self.slotIntervalMinutes = max(5, slotIntervalMinutes)
+		self.turnMinutes = max(15, turnMinutes)
+		self.slotStarts = slotStarts
+	}
+
+	public static var `default`: ReservationBookingSettings { .init() }
+}
+
+public struct BusinessConfig: Content, Sendable, Equatable, BinaryResponseEncodable {
 	public var id: String
 	public var timezone: String
 	public var hours: [BusinessHours]
 	public var seatingCapacity: Int
 	public var staffing: StaffingRules
+	/// When false, earn/redeem at checkout is disabled (manual desk adjust still allowed).
+	public var loyaltyEnabled: Bool? = nil
+	/// Points awarded per paid unit when the menu item has earn enabled.
+	public var loyaltyEarnPointsPerUnit: Int? = nil
+	/// Admin reservation inventory + offered timeslots.
+	public var reservationBooking: ReservationBookingSettings? = nil
+	/// When true (and ops PAYMENTS_ENABLED + Stripe keys), in-app prepaid / wallets are offered.
+	public var prepaidPaymentsEnabled: Bool? = nil
+	/// When false, guests cannot place unpaid / pay-at-pickup orders. Default (nil) is on.
+	public var payAtPickupEnabled: Bool? = nil
+
+	public var isLoyaltyProgramEnabled: Bool { loyaltyEnabled == true }
+	public var earnPointsPerUnit: Int { max(1, loyaltyEarnPointsPerUnit ?? 5) }
+	public var bookingSettings: ReservationBookingSettings {
+		reservationBooking ?? .default
+	}
+	public var isPayAtPickupEnabled: Bool { payAtPickupEnabled != false }
+	public var isPrepaidPaymentsEnabled: Bool { prepaidPaymentsEnabled == true }
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 

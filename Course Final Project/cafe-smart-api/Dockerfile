@@ -16,7 +16,10 @@ WORKDIR /build
 # This creates a cached layer that can be reused
 # as long as your Package.swift/Package.resolved
 # files do not change.
+# NOTE: Vendor/swift-onnx-runtime must be a real directory copy in the build
+# context (Docker will not follow host symlinks that point outside the context).
 COPY ./Package.* ./
+COPY ./Vendor ./Vendor
 RUN swift package resolve \
         $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
@@ -46,6 +49,9 @@ RUN find -L "$(swift build --package-path /build -c release --show-bin-path)/" -
 # Ensure that by default, neither the directory nor any of its contents are writable.
 RUN [ -d /build/Certificates ] && { mv /build/Certificates ./Certificates && chmod -R a-w ./Certificates; } || true
 RUN [ -f /build/.env ] && { cp /build/.env ./.env && chmod -R a-w ./.env; } || true
+RUN mkdir -p ./lib ./Trainer \
+ && cp -a /build/Vendor/swift-onnx-runtime/Sources/CONNX/lib/. ./lib/ \
+ && cp -a /build/Trainer/. ./Trainer/
 
 
 # ================================
@@ -61,6 +67,9 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
       libjemalloc2 \
       ca-certificates \
       tzdata \
+      python3 \
+      python3-venv \
+      python3-pip \
 # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
       # libcurl4 \
 # If your app or its dependencies import FoundationXML, also install `libxml2`.
@@ -76,8 +85,15 @@ WORKDIR /app
 # Copy built executable and any staged resources from builder
 COPY --from=build --chown=manager:manager /staging /app
 
+RUN python3 -m venv /app/Trainer/.venv \
+ && /app/Trainer/.venv/bin/pip install --no-cache-dir -r /app/Trainer/requirements.txt \
+ && chown -R manager:manager /app/Trainer
+
 # Provide configuration needed by the built-in crash reporter and some sensible default behaviors.
 ENV SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=./swift-backtrace-static
+ENV LD_LIBRARY_PATH=/app/lib
+ENV TRAINER_PYTHON=/app/Trainer/.venv/bin/python
+ENV TRAINER_SCRIPT=/app/Trainer/train_restock.py
 
 # Ensure all further commands run as the manager user
 USER manager:manager

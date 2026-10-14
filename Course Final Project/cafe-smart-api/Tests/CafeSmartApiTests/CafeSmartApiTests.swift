@@ -1,6 +1,7 @@
 @testable import CafeSmartApi
 import VaporTesting
 import Testing
+import BinaryCodable
 import BSON
 
 @Suite("App Tests")
@@ -22,8 +23,8 @@ struct CafeSmartApiTests {
         if let token {
             req.headers.replaceOrAdd(name: HTTPHeaders.Name.authorization, value: "Bearer \(token)")
         }
-        try req.content.encode(data, as: HTTPMediaType(type: "application", subType: "bson"))
-        req.headers.replaceOrAdd(name: HTTPHeaders.Name.accept, value: "application/bson")
+        try req.content.encode(data, as: .binaryCodable)
+        req.headers.replaceOrAdd(name: HTTPHeaders.Name.accept, value: "application/x-binary-codable")
         return try await app.responder.respond(to: req).get()
     }
     
@@ -43,7 +44,7 @@ struct CafeSmartApiTests {
             req.headers.replaceOrAdd(name: HTTPHeaders.Name.authorization, value: "Bearer \(token)")
         }
 
-        req.headers.replaceOrAdd(name: HTTPHeaders.Name.accept, value: "application/bson")
+        req.headers.replaceOrAdd(name: HTTPHeaders.Name.accept, value: "application/x-binary-codable")
         return try await app.responder.respond(to: req).get()
     }
 
@@ -122,9 +123,9 @@ struct CafeSmartApiTests {
             ws.onBinary { _, buffer in
                 var buffer = buffer
                 if let bytes: [UInt8] = buffer.readBytes(length: buffer.readableBytes) {
-                    let doc = Document(data: Data(bytes))
+                    let data = Data(bytes)
                     do {
-                        let decoded = try BSONDecoder().decode(RealtimeHub.MessagePacket.self, from: doc)
+                        let decoded = try BinaryDecoder().decode(RealtimeHub.MessagePacket.self, from: data)
                         packetPromise.succeed(decoded)
                     } catch {
                         packetPromise.fail(error)

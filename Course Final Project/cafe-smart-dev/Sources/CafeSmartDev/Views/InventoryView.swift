@@ -1,6 +1,6 @@
 //
 //  InventoryView.swift
-//  CafeSmart
+//  CafeSmartDev
 //
 //  Created by NeedleTails on 8/19/25
 //
@@ -36,93 +36,76 @@ struct InventoryView: View {
     let archiveBoxIcon = "archivebox"
 #endif
     
-    @State var availableWidth: CGFloat = 0
-    
     var body: some View {
-        ScrollView {
-            VStack(spacing: AppSpacing.lg) {
-                if let err = inventoryViewModel.errorMessage, !err.isEmpty {
-                    Text(err)
-                        .font(AppFont.footnote())
-                        .foregroundStyle(.red)
-                        .padding(10)
-                        .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                SectionHeader(title: "Inventory", subtitle: "Track current stock")
+        ScreenCanvas {
+            SectionHeader(
+                title: "Stock",
+                subtitle: "Adjust quantities or edit item details")
+
+            if let err = inventoryViewModel.errorMessage, !err.isEmpty {
+                ErrorBanner(message: err)
+            }
+
+            if inventoryViewModel.isLoading {
+                LoadingBlock()
+            } else if inventoryViewModel.items.isEmpty {
+                EmptyState(
+                    title: "No inventory yet",
+                    subtitle: "Stock items will appear here after sync.",
+                    systemImage: shippingBoxIcon
+                )
+            } else {
                 LazyVStack(spacing: AppSpacing.md) {
-                    if inventoryViewModel.isLoading {
-                        ProgressView()
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .center)
-                    }
-                    if inventoryViewModel.items.isEmpty && !inventoryViewModel.isLoading {
-                        Text("No inventory items yet.")
-                            .font(AppFont.subheadline())
-                            .foregroundStyle(.secondary)
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .center)
-                    }
                     ForEach(inventoryViewModel.items) { item in
-                        CardContainer(
-                            padding: AppSpacing.md,
-                            cornerRadius: 16,
-                            backgroundColor: .surfaceColor,
-                            borderColor: .separatorColor.opacity(0.35),
-                            borderWidth: 1,
-                            shadowEnabled: true,
-                            shadowColor: .black.opacity(0.05),
-                            shadowRadius: 10,
-                            shadowX: 0,
-                            shadowY: 6) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.name)
-                                            .font(AppFont.headline())
-                                        Text("\(item.quantity) \(item.unit) in stock")
-                                            .font(AppFont.subheadline())
-                                            .foregroundStyle(.secondary)
-                                        HStack(spacing: 8) {
-                                            if let supplier = item.supplier, !supplier.isEmpty {
-                                                Label(supplier, systemImage: shippingBoxIcon)
-                                                    .font(AppFont.footnote())
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            if let storage = item.storage {
-                                                Label(storage.rawValue.capitalized, systemImage: storage == .frozen ? snowflakeIcon : (storage == .refrigerated ? thermometorIcon : archiveBoxIcon))
-                                                    .font(AppFont.footnote())
-                                                    .foregroundStyle(.secondary)
-                                            }
+                        SurfacePanel {
+                            AdaptiveDetailRow {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(item.name)
+                                        .font(AppFont.headline())
+                                    Text("\(item.quantity) \(item.unit) in stock")
+                                        .font(AppFont.subheadline())
+                                        .foregroundStyle(.secondary)
+                                    HStack(spacing: 8) {
+                                        if let supplier = item.supplier, !supplier.isEmpty {
+                                            MetaLabel(icon: shippingBoxIcon, text: supplier)
                                         }
-                                        if item.quantity <= item.reorderThreshold {
-                                            Text("Low stock: reorder threshold \(item.reorderThreshold)")
-                                                .font(AppFont.footnote())
-                                                .foregroundStyle(.orange)
+                                        if let storage = item.storage {
+                                            let storageIcon = storage == .frozen
+                                                ? snowflakeIcon
+                                                : (storage == .refrigerated ? thermometorIcon : archiveBoxIcon)
+                                            MetaLabel(icon: storageIcon, text: storage.rawValue.capitalized)
                                         }
                                     }
-                                    Spacer()
-                                    HStack(spacing: AppSpacing.sm) {
-                                        IconChip(name: minusIcon)
-                                            .onTapGesture {
-                                                adjustAsync(item: item, delta: -1)
-                                            }
-                                        IconChip(name: plusIcon)
-                                            .onTapGesture {
-                                                adjustAsync(item: item, delta: 1)
-                                            }
-                                        PrimaryButton(title: "Edit", fillWidth: true) {
-                                            selectedForEdit = item
-                                        }
-                                        .frame(minWidth: 0, maxWidth: 160)
+                                    if item.quantity <= item.reorderThreshold {
+                                        StatusChip(
+                                            text: "Low stock · reorder at \(item.reorderThreshold)",
+                                            tone: .warning)
+                                    }
+                                    if let forecast = inventoryViewModel.restockBySku[item.sku], forecast.needRestock {
+                                        StatusChip(
+                                            text: "Forecast: reorder \(forecast.reorderQty) \(item.unit)",
+                                            tone: .warning)
+                                    }
+                                }
+                            } actions: {
+                                HStack(spacing: AppSpacing.sm) {
+                                    StepperChips(
+                                        minusIcon: minusIcon,
+                                        plusIcon: plusIcon,
+                                        onMinus: { adjustAsync(item: item, delta: -1) },
+                                        onPlus: { adjustAsync(item: item, delta: 1) }
+                                    )
+                                    .accessibilityElement(children: .contain)
+                                    SecondaryButton(title: "Edit", fillWidth: false) {
+                                        selectedForEdit = item
                                     }
                                 }
                             }
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .leading)
+                        }
                     }
                 }
             }
-            .padding()
         }
-        .captureWidth(in: $availableWidth)
         .navigationTitle("Inventory")
         .task {
             if inventoryViewModel.items.isEmpty {
@@ -143,9 +126,9 @@ struct InventoryView: View {
             }
         }
         .sheet(item: $selectedForEdit) { item in
-//            InventoryEditSheet(item: item) { updated in
-//                saveInventoryUpdateAsync(updated)
-//            }
+            InventoryEditSheet(item: item) { updated in
+                saveInventoryUpdateAsync(updated)
+            }
         }
     }
 }
@@ -188,4 +171,3 @@ extension InventoryView {
         }
     }
 }
-

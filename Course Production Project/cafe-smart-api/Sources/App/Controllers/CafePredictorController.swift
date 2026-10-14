@@ -27,7 +27,6 @@
 
 import Foundation
 import Vapor
-import CoreML
 @preconcurrency import BSON
 import MongoKitten
 
@@ -78,232 +77,27 @@ struct CafePredictorController {
     /// - Returns: CSV file response
     /// - Throws: Errors for data processing or file operations
     func exportCSV(req: Request) async throws -> Response {
-        // Get query parameters
-        let qMode = (try? req.query.get(String.self, at: "mode")) ?? "ingredientDaily"
-//        let qSku = try? req.query.get(String.self, at: "sku")
-        
-        // Validate export mode
-        guard qMode == "ingredientDaily" else {
-            throw Abort(.badRequest, reason: "Only 'ingredientDaily' mode is supported")
-        }
-        
-        // Initialize data structures for aggregation
-        var dayToIngredientQty: [String: [DayBucket: Double]] = [:]
-        var dayToItemsTotal: [DayBucket: Double] = [:]
-        var dayToOrdersTotal: [DayBucket: Int] = [:]
-        
-        // Setup calendar and date formatter
-        let calendar = Calendar.current
-        let df = ISO8601DateFormatter()
-        
-        // Prepare temp file
-        let tempDir = FileManager.default.temporaryDirectory
-        let tempFile = tempDir.appendingPathComponent("export_\(UUID().uuidString).csv")
-        
-        // Helper function to write to file
-        func write(_ content: String) throws {
-            if FileManager.default.fileExists(atPath: tempFile.path) {
-                // Append to existing file
-                let fileHandle = try FileHandle(forWritingTo: tempFile)
-                defer { try? fileHandle.close() }
-                try fileHandle.seekToEnd()
-                try fileHandle.write(contentsOf: content.data(using: .utf8)!)
-            } else {
-                // Create new file
-                try content.write(to: tempFile, atomically: true, encoding: .utf8)
-            }
-        }
-        
-        // Helper function to get start of day
-        func startOfDay(_ date: Date) -> Date {
-            calendar.startOfDay(for: date)
-        }
-        
-        // Load recipes to map menu items to ingredients
-        var recipeMap: [String: [RecipeComponent]] = [:]
-        let recipes = try await req.store.listRecipes()
-        for r in recipes {
-            recipeMap[r.menuItemId] = r.components
-        }
-        
-        // Process orders from test store
-        func makeEvent(type: String, ts: Date) -> CafeEventDB {
-            let comps = calendar.dateComponents([.year, .month, .day, .hour, .weekday], from: ts)
-            return CafeEventDB(
-                type: type,
-                ts: ts,
-                year: comps.year ?? 0,
-                month: comps.month ?? 0,
-                day: comps.day ?? 0,
-                hour: comps.hour ?? 0,
-                weekday: comps.weekday ?? 0,
-                orderId: nil,
-                channel: nil,
-                serviceType: nil,
-                secondsToComplete: nil,
-                menuItemId: nil,
-                quantity: nil,
-                inventoryItemId: nil,
-                sku: nil,
-                level: nil,
-                threshold: nil,
-                reservationId: nil,
-                partySize: nil,
-                areaId: nil,
-                tableId: nil,
-                priceCents: nil,
-                available: nil
+        // Clients send `dataset=`; older callers used `mode=`.
+        let qMode = (try? req.query.get(String.self, at: "dataset"))
+            ?? (try? req.query.get(String.self, at: "mode"))
+            ?? "ingredientDaily"
+        let skuParam: String? = try? req.query.get(String.self, at: "sku")
+        let csv: String
+        switch qMode.lowercased() {
+        case "ingredientdaily":
+            csv = try await IngredientDailyCSV.forTraining(store: req.store, sku: skuParam)
+        case "ordershourly", "workloadhourly":
+            csv = try await OrdersHourlyCSV.forTraining(store: req.store)
+        case "reservationshourly":
+            csv = try await ReservationsHourlyCSV.forTraining(store: req.store)
+        default:
+            throw Abort(
+                .badRequest,
+                reason: "Unsupported dataset '\(qMode)'. Use ingredientDaily, ordersHourly, or reservationsHourly"
             )
         }
-        
-        var events: [CafeEventDB] = []
-        
-        // Convert orders to events
-        let orders = try await req.store.listOrders()
-        for o in orders {
-            var created = makeEvent(type: "orderCreated", ts: o.createdAt)
-            created.orderId = o.id
-            created.channel = o.channel?.rawValue
-            created.serviceType = o.serviceType?.rawValue
-            events.append(created)
-            
-            for it in o.items {
-                var dem = makeEvent(type: "orderItemDemand", ts: o.createdAt)
-                dem.orderId = o.id
-                dem.menuItemId = it.menuItemId
-                dem.quantity = Double(it.quantity)
-                dem.channel = o.channel?.rawValue
-                dem.serviceType = o.serviceType?.rawValue
-                events.append(dem)
-            }
-            
-            if o.status == .completed {
-                var comp = makeEvent(type: "orderCompleted", ts: o.createdAt.addingTimeInterval(120))
-                comp.orderId = o.id
-                comp.channel = o.channel?.rawValue
-                comp.serviceType = o.serviceType?.rawValue
-                comp.secondsToComplete = max(10.0, Date().timeIntervalSince(o.createdAt))
-                events.append(comp)
-            }
-        }
-        
-        // Convert reservations to events
-        let reservations = try await req.store.listReservations()
-        for r in reservations {
-            var ev = makeEvent(type: "reservationCreated", ts: r.startTime)
-            ev.reservationId = r.id
-            ev.partySize = r.partySize
-            ev.areaId = r.areaId
-            ev.tableId = r.tableId
-            events.append(ev)
-        }
-        
-        // Process events for ingredient daily aggregation
-        for ev in events {
-            if ev.type == "orderItemDemand", let q = ev.quantity, let mid = ev.menuItemId {
-                let db = DayBucket(date: startOfDay(ev.ts))
-                dayToItemsTotal[db, default: 0.0] += q
-                
-                if let comps = recipeMap[mid] {
-                    for c in comps {
-                        let factor = c.unitsPerItem * (1.0 + (c.wastageRate ?? 0.0))
-                        let used = q * factor
-                        var m = dayToIngredientQty[c.sku] ?? [:]
-                        m[db, default: 0.0] += used
-                        dayToIngredientQty[c.sku] = m
-                    }
-                }
-            }
-            
-            if ev.type == "orderCreated" {
-                let db = DayBucket(date: startOfDay(ev.ts))
-                dayToOrdersTotal[db, default: 0] += 1
-            }
-        }
-        
-        // MARK: - CSV Generation
-        
-        let skuParam: String? = try? req.query.get(String.self, at: "sku")
-        var allDays: Set<DayBucket> = []
-        for m in dayToIngredientQty.values {
-            for k in m.keys {
-                allDays.insert(k)
-            }
-        }
-        let sortedDays = allDays.map { $0 }.sorted { $0.date < $1.date }
-        
-        func usage(_ sku: String, _ d: DayBucket) -> Double {
-            return dayToIngredientQty[sku]?[d] ?? 0.0
-        }
-        
-        func orderCount(_ d: DayBucket) -> Int {
-            return dayToOrdersTotal[d] ?? 0
-        }
-        
-        func items(_ d: DayBucket) -> Double {
-            return dayToItemsTotal[d] ?? 0.0
-        }
-        
-        func writeGenericHeader() throws {
-            let header = [
-                "sku", "date", "year", "month", "day", "weekday", "is_weekend",
-                "orders_total_lag_1d", "items_total_lag_1d",
-                "usage_lag_1d", "usage_lag_7d", "rolling_usage_last_7d",
-                "usage_same_weekday_lag_28d",
-                "target_usage",
-            ].joined(separator: ",") + "\n"
-            try write(header)
-        }
-        
-        func emitRows(for sku: String) throws {
-            for db in sortedDays {
-                let d = db.date
-                let comps = calendar.dateComponents([.year, .month, .day, .weekday], from: d)
-                let isWeekend = (comps.weekday == 1 || comps.weekday == 7)
-                let dLag1 = DayBucket(date: calendar.date(byAdding: .day, value: -1, to: d)!)
-                let dLag7 = DayBucket(date: calendar.date(byAdding: .day, value: -7, to: d)!)
-                let dLag28 = DayBucket(date: calendar.date(byAdding: .day, value: -28, to: d)!)
-                
-                var sum: Double = 0
-                var cnt: Int = 0
-                for k in 1...7 {
-                    sum += usage(sku, DayBucket(date: calendar.date(byAdding: .day, value: -k, to: d)!))
-                    cnt += 1
-                }
-                let avg7 = cnt > 0 ? sum / Double(cnt) : 0.0
-                
-                let row: [String] = [
-                    sku,
-                    df.string(from: d),
-                    String(comps.year ?? 0), String(comps.month ?? 0), String(comps.day ?? 0),
-                    String(comps.weekday ?? 0), isWeekend ? "true" : "false",
-                    String(orderCount(dLag1)), String(format: "%.4f", items(dLag1)),
-                    String(format: "%.4f", usage(sku, dLag1)), String(format: "%.4f", usage(sku, dLag7)),
-                    String(format: "%.4f", avg7), String(format: "%.4f", usage(sku, dLag28)),
-                    String(format: "%.4f", usage(sku, db)),
-                ]
-                try write(row.joined(separator: ",") + "\n")
-            }
-        }
-        
-        if let sku = skuParam, !sku.isEmpty {
-            try writeGenericHeader()
-            try emitRows(for: sku)
-        } else {
-            try writeGenericHeader()
-            let allSkus = dayToIngredientQty.keys.sorted()
-            for sku in allSkus {
-                try emitRows(for: sku)
-            }
-        }
-        
-        // Create response with CSV data
-        let data = try Data(contentsOf: tempFile)
-        let buffer = ByteBufferAllocator().buffer(data: data)
-        
-        // Clean up temp file
-        try? FileManager.default.removeItem(at: tempFile)
-        
+        var buffer = ByteBufferAllocator().buffer(capacity: csv.utf8.count)
+        buffer.writeString(csv)
         return Response(
             status: .ok,
             headers: HTTPHeaders([
@@ -328,43 +122,46 @@ struct CafePredictorController {
     /// - Returns: Model upload response with metadata
     /// - Throws: Errors for file operations or model validation
     func uploadModel(req: Request) async throws -> ModelUploadResponse {
-        // Extract query parameters
         let qName = (try? req.query.get(String.self, at: "name")) ?? ""
-        let qRuntime = (try? req.query.get(String.self, at: "runtime")) ?? "coreml"
+        let qRuntime = try? req.query.get(String.self, at: "runtime")
         let qKind = (try? req.query.get(String.self, at: "kind")) ?? "restockDaily"
-        
-        // Validate request body
+
         guard let buffer = req.body.data else {
             throw Abort(.badRequest, reason: "Empty request body")
         }
-        
-        // Process filename and ensure proper extension
-        let providedName = (qName.isEmpty == false ? qName : nil) ?? "model.mlmodel"
-        
-        // Ensure the filename has .mlmodel extension
-        var filename = providedName
-        if !filename.hasSuffix(".mlmodel") {
-            filename += ".mlmodel"
+
+        let runtime: PredictRuntime
+        do {
+            runtime = try ModelUploadSupport.parseRuntime(qRuntime)
+        } catch let error as PredictorError {
+            switch error {
+            case .unavailable:
+                throw Abort(.serviceUnavailable, reason: error.description)
+            default:
+                throw Abort(.badRequest, reason: error.description)
+            }
         }
-        filename = filename.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "..", with: ".")
-        
+
+        let filename = try ModelUploadSupport.sanitizedFilename(qName, runtime: runtime)
         let kind = PredictorKind(rawValue: qKind) ?? .restockDaily
-        let modelsRoot = req.application.directory.workingDirectory + "Models/" + qRuntime + "/" + kind.rawValue + "/"
+        let modelsRoot = ModelUploadSupport.modelsRoot(
+            workingDirectory: req.application.directory.workingDirectory,
+            runtime: runtime,
+            kind: kind
+        )
         try FileManager.default.createDirectory(atPath: modelsRoot, withIntermediateDirectories: true)
         let targetPath = modelsRoot + filename
         try await req.fileio.writeFile(buffer, at: targetPath)
-        
-        // Get file attributes
+
         let attrs = try FileManager.default.attributesOfItem(atPath: targetPath)
         let size = (attrs[.size] as? NSNumber)?.intValue ?? buffer.readableBytes
-        
-        // Create model artifact record
-        let _id = ObjectId()
+
+        let id = ObjectId().hexString
         let artifact = MLModelArtifact(
-            _id: _id,
-            id: _id.hexString,
+            _id: id,
+            id: id,
             filename: filename,
-            runtime: PredictRuntime(rawValue: qRuntime)!,
+            runtime: runtime,
             kind: kind,
             storedAt: targetPath,
             bytes: size,
@@ -373,25 +170,22 @@ struct CafePredictorController {
         )
         try await req.application.mongoStore.createModelArtifact(artifact)
         await req.application.realtime.publish(.modelUploaded(artifact), to: .merchant)
-        
-        // Activate and instantiate the model
+
         try await activateModel(req: req, id: artifact._id)
-        try await instantiateModel(req: req, kind: kind)
-        
-        // Trigger background sweep for restock decisions
-        let results = await self.computeRestockDecisions(app: req.application)
-        for result in results where result.decision.needRestock {
-            await req.application.realtime.publish(.inventory(.runningLow(result.item)), to: .merchant)
+        await ModelArtifactLifecycle.prune(app: req.application, kind: kind, runtime: runtime)
+
+        if kind == .restockDaily {
+            await publishRestockDecisions(app: req.application)
         }
-        
+
         return ModelUploadResponse(
-            id: artifact._id.hexString,
+            id: artifact._id,
             filename: filename,
-            runtime: qRuntime,
+            runtime: runtime.rawValue,
             bytes: size,
             storedAt: targetPath,
             kind: kind.rawValue,
-            active: artifact.active
+            active: true
         )
     }
     
@@ -403,9 +197,9 @@ struct CafePredictorController {
     /// - Parameter req: The HTTP request
     /// - Returns: List of model artifacts
     /// - Throws: Errors for database operations
-    func listModels(req: Request) async throws -> MLModelsWrapper {
+    func listModels(req: Request) async throws -> ModelsList {
         let result = try await req.application.mongoStore.listModelArtifacts()
-        return MLModelsWrapper(items: result)
+        return ModelsList(items: result)
     }
     
     /// Activate a specific model
@@ -421,15 +215,31 @@ struct CafePredictorController {
             var id: String
         }
         let body = try req.content.decode(Activate.self)
-        guard let oid = ObjectId(body.id) else { throw Abort(.badRequest) }
-        try await activateModel(req: req, id: oid)
+        guard !body.id.isEmpty else { throw Abort(.badRequest) }
+        try await activateModel(req: req, id: body.id)
+        return .ok
+    }
+
+    /// Delete an inactive model artifact (active models must be replaced first).
+    func deleteModel(req: Request) async throws -> HTTPStatus {
+        struct DeleteBody: Content {
+            var id: String
+        }
+        let body = try req.content.decode(DeleteBody.self)
+        guard !body.id.isEmpty else { throw Abort(.badRequest) }
+        try await ModelArtifactLifecycle.deleteInactive(app: req.application, id: body.id)
         return .ok
     }
     
-    /// Internal method to activate a model by ObjectId
-    private func activateModel(req: Request, id: ObjectId) async throws {
-        try await req.application.mongoStore.setActiveModel(id: id.hexString)
-        await req.application.realtime.publish(.modelActivated(kind: .restockDaily, id: id.hexString), to: .merchant)
+    /// Activate by id, then load the predictor into the registry.
+    private func activateModel(req: Request, id: String) async throws {
+        guard try await req.application.mongoStore.findModelArtifact(by: id) != nil else {
+            throw Abort(.notFound, reason: "Model artifact not found")
+        }
+        try await req.application.mongoStore.setActiveModel(id: id)
+        let artifact = try await req.application.mongoStore.findModelArtifact(by: id)!
+        await req.application.realtime.publish(.modelActivated(kind: artifact.kind, id: id), to: .merchant)
+        try await instantiateModel(req: req, kind: artifact.kind)
     }
     
     /// Instantiate a predictor for a specific kind
@@ -459,7 +269,13 @@ struct CafePredictorController {
         guard let artifact = artifacts.first(where: { $0.kind == kind && $0.active }) else {
             throw Abort(.notFound, reason: "No active model for kind \(kind.rawValue)")
         }
-        let predictor = try await Predictor(modelPath: artifact.storedAt)
+        let predictor: any PredictorServing
+        do {
+            predictor = try await PredictorFactory.make(
+                runtime: artifact.runtime, path: artifact.storedAt, kind: kind)
+        } catch let error as PredictorError {
+            throw Abort(.failedDependency, reason: error.description)
+        }
         await req.application.predictors.set(
             kind: kind, runtime: artifact.runtime, path: artifact.storedAt, predictor: predictor)
         await req.application.realtime.publish(.predictorReady(kind: kind), to: .merchant)
@@ -478,7 +294,7 @@ struct CafePredictorController {
     ///   - kind: The predictor kind to retrieve
     /// - Returns: The predictor instance
     /// - Throws: Error if predictor is not ready
-    private func requirePredictor(app: Application, _ kind: PredictorKind) async throws -> Predictor {
+    private func requirePredictor(app: Application, _ kind: PredictorKind) async throws -> any PredictorServing {
         guard let predictor = await app.predictors.get(kind) else {
             throw Abort(.failedDependency, reason: "Predictor not ready for \(kind.rawValue)")
         }
@@ -542,52 +358,75 @@ struct CafePredictorController {
     /// - Returns: Array of predicted demand values
     /// - Throws: Errors for model prediction or data processing
     func forecastSeries(app: Application, horizon: Int, sku: String) async throws -> [Double] {
-        let predictor = try await requirePredictor(app: app, .restockDaily)
-        let (_, outName) = try await predictor.ioNames()
-        
         // Get inventory item data
         let all = try await listInventoryItems(app: app)
         guard all.first(where: { $0.sku == sku }) != nil else {
             throw Abort(.notFound, reason: "Inventory item not found for sku \(sku)")
         }
-        
-        // Get historical order data
-        let orders = try await app.mongoStore.listOrders()
-        
+
+        // Deterministic synthetic ramp in tests (no CoreML/ONNX dependency).
+        if isTesting(app: app) {
+            return (1...max(horizon, 0)).map { Double($0) }
+        }
+
+        let predictor = try await requirePredictor(app: app, .restockDaily)
+        let (_, outName) = try await predictor.ioNames()
+
+        // Restock features need ~28d history; avoid full-collection scans on seeded DBs.
+        let featureLookbackDays = 60
+        let now = Date()
+        let from = Calendar.current.date(byAdding: .day, value: -featureLookbackDays, to: now) ?? now
+        let orders = try await app.mongoStore.listOrders(from: from, to: now.addingTimeInterval(1))
+        var lag1 = await calculateUsageFromOrders(orders: orders, sku: sku, daysAgo: 1, app: app)
+        var lag7 = await calculateUsageFromOrders(orders: orders, sku: sku, daysAgo: 7, app: app)
+        var rolling = await calculateRollingUsage(orders: orders, sku: sku, days: 7, app: app)
+        let usageSameWeekday28d = await calculateUsageFromOrders(
+            orders: orders, sku: sku, daysAgo: 28, app: app)
+        let ordersLag1d = calculateOrderCount(orders: orders, daysAgo: 1)
+        let itemsLag1d = calculateItemsSold(orders: orders, daysAgo: 1)
+
         var ys: [Double] = []
         for dayOffset in 0..<horizon {
             let targetDate = Calendar.current.date(byAdding: .day, value: dayOffset, to: Date()) ?? Date()
-            
-            // Calculate real usage data from orders
-            let usageLag1d = await calculateUsageFromOrders(orders: orders, sku: sku, daysAgo: 1, app: app)
-            let usageLag7d = await calculateUsageFromOrders(orders: orders, sku: sku, daysAgo: 7, app: app)
-            let rollingUsage7d = await calculateRollingUsage(orders: orders, sku: sku, days: 7, app: app)
-            let usageSameWeekday28d = await calculateUsageFromOrders(orders: orders, sku: sku, daysAgo: 28, app: app)
-            
-            // Get order counts
-            let ordersLag1d = calculateOrderCount(orders: orders, daysAgo: 1)
-            let itemsLag1d = calculateItemsSold(orders: orders, daysAgo: 1)
-            
-            // Prepare input features for ML model
-            let inputs: [String: Any] = [
-                "usage_lag_1d": usageLag1d,
-                "sku": sku,
-                "day": Calendar.current.component(.day, from: targetDate),
-                "weekday": Calendar.current.component(.weekday, from: targetDate),
-                "month": Calendar.current.component(.month, from: targetDate),
-                "orders_total_lag_1d": ordersLag1d,
-                "year": Calendar.current.component(.year, from: targetDate),
-                "usage_lag_7d": usageLag7d,
-                "items_total_lag_1d": itemsLag1d,
-                "rolling_usage_last_7d": rollingUsage7d,
-                "usage_same_weekday_lag_28d": usageSameWeekday28d
+
+            let inputs: [String: PredictorFeature] = [
+                "usage_lag_1d": .double(lag1),
+                "sku": .string(sku),
+                "day": .int(Calendar.current.component(.day, from: targetDate)),
+                "weekday": .int(Calendar.current.component(.weekday, from: targetDate)),
+                "month": .int(Calendar.current.component(.month, from: targetDate)),
+                "orders_total_lag_1d": .int(ordersLag1d),
+                "year": .int(Calendar.current.component(.year, from: targetDate)),
+                "usage_lag_7d": .double(lag7),
+                "items_total_lag_1d": .double(itemsLag1d),
+                "rolling_usage_last_7d": .double(rolling),
+                "usage_same_weekday_lag_28d": .double(usageSameWeekday28d),
             ]
-            
-            // Make prediction using Core ML model
+
             let out = try await predictor.predictMultiple(inputs: inputs, outputName: outName)
-            ys.append(Double(out.first ?? 0))
+            let pred = Double(out.first ?? 0)
+            ys.append(pred)
+            let rolled = Self.rollFeatures(lag1: lag1, lag7: lag7, rolling: rolling, prediction: pred)
+            lag1 = rolled.lag1
+            lag7 = rolled.lag7
+            rolling = rolled.rolling
         }
         return ys
+    }
+
+    /// Recursive lag/rolling update used by multi-step `forecastSeries`.
+    static func rollFeatures(
+        lag1: Double,
+        lag7: Double,
+        rolling: Double,
+        prediction: Double
+    ) -> (lag1: Double, lag7: Double, rolling: Double) {
+        _ = lag7
+        return (
+            lag1: prediction,
+            lag7: lag1,
+            rolling: (rolling * 6 + prediction) / 7
+        )
     }
     
     // MARK: - Helper Methods for Data Calculation
@@ -736,17 +575,6 @@ struct CafePredictorController {
         var daysAhead: Int?
     }
     
-    /// Response structure for restock decisions
-    struct RestockDecisionResponse: Content {
-        var sku: String
-        var needRestock: Bool
-        var reorderQty: Int
-        var reorderPoint: Int
-        var leadTimeDays: Int
-        var onHand: Int
-        var forecastSumNextLeadTime: Int
-    }
-    
     /// Make a restock decision for an inventory item
     /// 
     /// This endpoint combines ML predictions with business logic to determine
@@ -801,11 +629,15 @@ struct CafePredictorController {
         let series = try await forecastSeries(app: app, horizon: forecastHorizon, sku: sku)
 
         // Demand expected during lead time (sum of first `leadTimeDays` entries; ignore negatives)
-        let demandDuringLead = Int(series
+        let rawDemandDuringLead = series
             .prefix(leadTimeDays)
             .map { max(0.0, $0) }
             .reduce(0.0, +)
-            .rounded())
+
+        // Scale SKU demand by cafe-wide workload outlook vs historical baseline.
+        let busynessScale = try await DemandInference.busynessScale(
+            app: app, leadTimeDays: leadTimeDays)
+        let demandDuringLead = Int((rawDemandDuringLead * busynessScale).rounded())
 
         // Reorder point (ROP) and whether restock is needed
         let reorderPoint = safetyStockLevel + demandDuringLead
@@ -817,6 +649,8 @@ struct CafePredictorController {
         // Always respect minimumReorderQty and never return negative
         let targetLevel = parLevel ?? reorderPoint
         let reorderQty = max(targetLevel - currentOnHand, minimumReorderQty, 0)
+        let unitCost = item.costPerUnitCents
+        let predictedSpend = unitCost.map { $0 * reorderQty }
 
         return RestockDecisionResponse(
             sku: sku,
@@ -825,7 +659,10 @@ struct CafePredictorController {
             reorderPoint: reorderPoint,
             leadTimeDays: leadTimeDays,
             onHand: currentOnHand,
-            forecastSumNextLeadTime: demandDuringLead
+            forecastSumNextLeadTime: demandDuringLead,
+            predictedSpendCents: predictedSpend,
+            busynessScale: busynessScale,
+            unitCostCents: unitCost
         )
     }
 
@@ -854,21 +691,126 @@ struct CafePredictorController {
         
         do {
             let items = try await listInventoryItems(app: app)
+            app.logger.info("Computing restock decisions for \(items.count) inventory item(s)")
             
             for item in items {
                 do {
                     let decision = try await decideRestock(app: app, sku: item.sku, daysAhead: daysAhead)
                     results.append(RestockDecisionWithItem(item: item, decision: decision))
                 } catch {
-                    // Log error but continue processing other items
-                    print("Error processing restock decision for \(item.sku): \(error)")
+                    app.logger.warning("Restock decision failed for \(item.sku): \(error)")
                 }
             }
         } catch {
-            print("Error retrieving inventory items: \(error)")
+            app.logger.error("Failed to list inventory for restock decisions: \(error)")
         }
         
         return results
+    }
+
+    /// Publish full prediction batch (+ runningLow for items that need restock).
+    func publishRestockDecisions(app: Application, daysAhead: Int? = nil) async {
+        let results = await computeRestockDecisions(app: app, daysAhead: daysAhead)
+        let decisions = results.map(\.decision)
+        let need = decisions.filter(\.needRestock).count
+        app.logger.info("Publishing \(decisions.count) restock decision(s); needRestock=\(need)")
+        if decisions.isEmpty {
+            app.logger.warning(
+                "No restock predictions to send (empty inventory or every SKU failed). Set SEED_TEST_DATA=true or add inventory."
+            )
+            return
+        }
+        await app.realtime.publish(.restockDecisions(decisions), to: .merchant)
+        for result in results where result.decision.needRestock {
+            await app.realtime.publish(.inventory(.runningLow(result.item)), to: .merchant)
+        }
+    }
+
+    // MARK: - Server training
+
+    struct TrainRequest: Content {
+        var kind: String?
+    }
+
+    func capabilities(req: Request) async throws -> PredictorCapabilities {
+        await req.application.trainJobs.capabilities(
+            workingDirectory: req.application.directory.workingDirectory
+        )
+    }
+
+    func startTrain(req: Request) async throws -> Response {
+        let body = (try? req.content.decode(TrainRequest.self)) ?? TrainRequest(kind: nil)
+        let kind = PredictorKind(rawValue: body.kind ?? "restockDaily") ?? .restockDaily
+        let runner = req.application.processRunner
+        let app = req.application
+        let workingDirectory = TrainJobService.normalizedDirectory(app.directory.workingDirectory)
+        let scriptPath = TrainJobService.scriptPath(for: kind, workingDirectory: workingDirectory)
+
+        let csvBuilder: @Sendable () async throws -> String
+        switch kind {
+        case .restockDaily:
+            csvBuilder = { try await IngredientDailyCSV.forTraining(store: app.mongoStore) }
+        case .workloadHourly:
+            csvBuilder = { try await OrdersHourlyCSV.forTraining(store: app.mongoStore) }
+        case .reservationsHourly:
+            csvBuilder = { try await ReservationsHourlyCSV.forTraining(store: app.mongoStore) }
+        case .reservationDuration:
+            throw Abort(.badRequest, reason: "Training not wired for reservationDuration")
+        }
+
+        let job = try await req.application.trainJobs.start(
+            app: app,
+            kind: kind,
+            runner: runner,
+            csvBuilder: csvBuilder,
+            scriptPath: scriptPath
+        )
+        return try Self.jsonResponse(status: .accepted, job)
+    }
+
+    func listTrainJobs(req: Request) async throws -> Response {
+        let jobs = try await req.application.trainJobs.listJobs(app: req.application, limit: 50)
+        return try Self.jsonResponse(status: .ok, TrainJobList(items: jobs))
+    }
+
+    func getTrainJob(req: Request) async throws -> Response {
+        guard let id = req.parameters.get("jobId"),
+              let job = await req.application.trainJobs.getJob(app: req.application, id: id)
+        else {
+            throw Abort(.notFound, reason: "Training job not found")
+        }
+        return try Self.jsonResponse(status: .ok, job)
+    }
+
+    func autoTrainStatus(req: Request) async throws -> Response {
+        let status = await TrainScheduleService.status(app: req.application)
+        return try Self.jsonResponse(status: .ok, status)
+    }
+
+    private static func jsonResponse<T: Encodable>(status: HTTPStatus, _ value: T) throws -> Response {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        var headers = HTTPHeaders()
+        headers.replaceOrAdd(name: .contentType, value: "application/json")
+        return Response(status: status, headers: headers, body: .init(data: data))
+    }
+
+    static func minimalTrainingCSV() -> String {
+        let header = [
+            "sku", "date", "year", "month", "day", "weekday", "is_weekend",
+            "orders_total_lag_1d", "items_total_lag_1d",
+            "usage_lag_1d", "usage_lag_7d", "rolling_usage_last_7d",
+            "usage_same_weekday_lag_28d",
+            "target_usage",
+        ].joined(separator: ",")
+        var rows = [header]
+        for i in 1...20 {
+            rows.append(
+                "BEANS,2024-01-\(String(format: "%02d", i)),2024,1,\(i),\(i % 7 + 1),0,3,10,2.0,2.5,2.2,2.1,\(Double(i) * 0.5)"
+            )
+        }
+        return rows.joined(separator: "\n") + "\n"
     }
 }
 
@@ -876,7 +818,7 @@ struct CafePredictorController {
 // =======================
 
 /// Response structure for model upload operations
-struct ModelUploadResponse: Content {
+struct ModelUploadResponse: Content, Sendable, BinaryResponseEncodable {
     let id: String
     let filename: String
     let runtime: String
@@ -884,41 +826,28 @@ struct ModelUploadResponse: Content {
     let storedAt: String
     let kind: String
     let active: Bool
-}
 
-/// Day bucket for time-series aggregation
-struct DayBucket: Hashable {
-    let date: Date
-    
-    init(date: Date) {
-        self.date = date
+    func encodeResponse(for request: Request) async throws -> Response {
+        try binaryEncodedResponse()
     }
 }
 
-/// Database event structure for analytics
-struct CafeEventDB {
-    var type: String
-    var ts: Date
-    var year: Int
-    var month: Int
-    var day: Int
-    var hour: Int
-    var weekday: Int
-    var orderId: String?
-    var channel: String?
-    var serviceType: String?
-    var secondsToComplete: Double?
-    var menuItemId: String?
-    var quantity: Double?
-    var inventoryItemId: String?
-    var sku: String?
-    var level: Double?
-    var threshold: Double?
-    var reservationId: String?
-    var partySize: Int?
-    var areaId: String?
-    var tableId: String?
-    var priceCents: Int?
-    var available: Bool?
+/// Response structure for restock decisions (wire name matches client)
+struct RestockDecisionResponse: Content, Sendable, Equatable, BinaryResponseEncodable {
+    var sku: String
+    var needRestock: Bool
+    var reorderQty: Int
+    var reorderPoint: Int
+    var leadTimeDays: Int
+    var onHand: Int
+    var forecastSumNextLeadTime: Int
+    /// Optional spend estimate: reorderQty * unitCost when cost is known.
+    var predictedSpendCents: Int? = nil
+    var busynessScale: Double? = nil
+    var unitCostCents: Int? = nil
+
+    func encodeResponse(for request: Request) async throws -> Response {
+        try binaryEncodedResponse()
+    }
 }
 

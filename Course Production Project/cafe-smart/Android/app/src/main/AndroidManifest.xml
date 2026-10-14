@@ -13,7 +13,9 @@
         android:label="${PRODUCT_NAME}"
         android:name=".AndroidAppMain"
         android:supportsRtl="true"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

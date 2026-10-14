@@ -41,13 +41,17 @@ public actor MongoCacheManager: MongoStore {
   private let tablesCol = "tables"
   private let businessConfigCol = "business_config"
   private let mlModelsCol = "ml_models"
+  private let mlTrainJobsCol = "ml_train_jobs"
 
   public init(db: MongoDatabase) {
     self.db = db
   }
 
   // Internal wrapper for encrypted refresh tokens
-  private struct EncryptedObject: Codable, Sendable { let refreshToken: Data }
+  private struct EncryptedObject: Codable, Sendable {
+    let userId: String?
+    let refreshToken: Data
+  }
 
   // MARK: Orders
   public func create(order: Order) async throws -> Order {
@@ -164,7 +168,13 @@ public actor MongoCacheManager: MongoStore {
 
   // MARK: Users
   public func createUser(_ user: User) async throws {
-    try await db[users].insert(try BSONEncoder().encode(user))
+    var doc = try BSONEncoder().encode(user)
+    // Align Mongo `_id` with the app user id used in JWTs. Without this, Mongo
+    // auto-assigns a different ObjectId and auth lookup by JWT `sub` fails.
+    if let oid = ObjectId(user.id) {
+      doc["_id"] = oid
+    }
+    try await db[users].insert(doc)
   }
 
   public func listUsers() async throws -> [User] {
@@ -174,8 +184,13 @@ public actor MongoCacheManager: MongoStore {
   }
 
   public func findUser(byId id: String) async throws -> User? {
-    guard let oid = ObjectId(id) else { return nil }
-    if let doc = try await db[users].findOne("_id" == oid) { return try BSONDecoder().decode(User.self, from: doc) }
+    // Prefer app `id` field (JWT subject). Also accept `_id` for well-formed docs.
+    if let doc = try await db[users].findOne("id" == id) {
+      return try BSONDecoder().decode(User.self, from: doc)
+    }
+    if let oid = ObjectId(id), let doc = try await db[users].findOne("_id" == oid) {
+      return try BSONDecoder().decode(User.self, from: doc)
+    }
     return nil
   }
 
@@ -187,19 +202,27 @@ public actor MongoCacheManager: MongoStore {
   }
 
   public func updateUser(_ user: User) async throws -> User {
-    guard let oid = ObjectId(user.id) else { throw Errors.notFound }
-    _ = try await db[users].updateOne(where: "_id" == oid, to: try BSONEncoder().encode(user))
+    let encoded = try BSONEncoder().encode(user)
+    let matched = try await db[users].updateOne(where: "id" == user.id, to: encoded)
+    if matched.updatedCount == 0, let oid = ObjectId(user.id) {
+      _ = try await db[users].updateOne(where: "_id" == oid, to: encoded)
+    }
     return user
   }
 
   public func updatePassword(user: User) async throws {
-    guard let oid = ObjectId(user.id) else { throw Errors.notFound }
-    _ = try await db[users].updateOne(where: "_id" == oid, to: try BSONEncoder().encode(user))
+    let encoded = try BSONEncoder().encode(user)
+    let matched = try await db[users].updateOne(where: "id" == user.id, to: encoded)
+    if matched.updatedCount == 0, let oid = ObjectId(user.id) {
+      _ = try await db[users].updateOne(where: "_id" == oid, to: encoded)
+    }
   }
 
   public func deleteUser(id: String) async throws {
-    guard let oid = ObjectId(id) else { return }
-    _ = try await db[users].deleteOne(where: "_id" == oid)
+    let deleted = try await db[users].deleteOne(where: "id" == id)
+    if deleted.deletes == 0, let oid = ObjectId(id) {
+      _ = try await db[users].deleteOne(where: "_id" == oid)
+    }
   }
 
   // MARK: Refresh Tokens
@@ -209,16 +232,35 @@ public actor MongoCacheManager: MongoStore {
     let data = try BSONEncoder().encode(token).makeData()
     let sealed = try AES.GCM.seal(data, using: symmetricKey)
     guard let combined = sealed.combined else { throw Abort(.badRequest) }
-    let enc = EncryptedObject(refreshToken: combined)
+    let enc = EncryptedObject(userId: token._id, refreshToken: combined)
     try await db[refresh].insert(try BSONEncoder().encode(enc))
     return combined
   }
 
   public func findUser(refreshToken: Data) async throws -> User? {
     for try await doc in db[refresh].find() {
-      if let enc = try? BSONDecoder().decode(EncryptedObject.self, from: doc),
-        enc.refreshToken == refreshToken {
-        return nil
+      guard let enc = try? BSONDecoder().decode(EncryptedObject.self, from: doc),
+        enc.refreshToken == refreshToken
+      else { continue }
+
+      if let userId = enc.userId, let user = try await findUser(byId: userId) {
+        let key = SymmetricKey(data: user.symmetricKey)
+        guard let dec = try? AES.GCM.open(.init(combined: refreshToken), using: key),
+          let tok = try? BSONDecoder().decode(RefreshToken.self, from: Document(data: dec)),
+          tok._id == user.id,
+          tok.expiresAt >= Date()
+        else { return nil }
+        return user
+      }
+
+      for user in try await listUsers() {
+        let key = SymmetricKey(data: user.symmetricKey)
+        guard let dec = try? AES.GCM.open(.init(combined: refreshToken), using: key),
+          let tok = try? BSONDecoder().decode(RefreshToken.self, from: Document(data: dec)),
+          tok._id == user.id,
+          tok.expiresAt >= Date()
+        else { continue }
+        return user
       }
     }
     return nil
@@ -255,7 +297,9 @@ public actor MongoCacheManager: MongoStore {
   }
 
   public func removeUserTokens(_ user: User) async throws {
-    // Best-effort: tokens are user-encrypted; without symmetric key, we can't match
+    for try await doc in db[refresh].find("userId" == user.id) {
+      _ = try await db[refresh].deleteOne(where: doc)
+    }
   }
 
   // MARK: Recipes
@@ -395,32 +439,80 @@ public actor MongoCacheManager: MongoStore {
   }
 
   public func findModelArtifact(by id: String) async throws -> MLModelArtifact? {
-    guard let oid = ObjectId(id) else { return nil }
-    if let doc = try await db[mlModelsCol].findOne("_id" == oid) {
+    if let doc = try await db[mlModelsCol].findOne("_id" == id) {
+      return try BSONDecoder().decode(MLModelArtifact.self, from: doc)
+    }
+    if let oid = ObjectId(id), let doc = try await db[mlModelsCol].findOne("_id" == oid) {
+      return try BSONDecoder().decode(MLModelArtifact.self, from: doc)
+    }
+    if let doc = try await db[mlModelsCol].findOne("id" == id) {
       return try BSONDecoder().decode(MLModelArtifact.self, from: doc)
     }
     return nil
   }
 
   public func setActiveModel(id: String) async throws {
-    guard let oid = ObjectId(id) else { return }
-    if let current = try await db[mlModelsCol].findOne("_id" == oid) {
-      guard let artifact = try? BSONDecoder().decode(MLModelArtifact.self, from: current) else { return }
-      _ = try await db[mlModelsCol].updateMany(
-        where: ["kind": artifact.kind.rawValue], to: ["$set": ["active": false]])
-      _ = try await db[mlModelsCol].updateOne(
-        where: "_id" == artifact._id, to: ["$set": ["active": true]])
+    guard let artifact = try await findModelArtifact(by: id) else {
+      throw Errors.notFound
     }
+    _ = try await db[mlModelsCol].updateMany(
+      where: ["kind": artifact.kind.rawValue], to: ["$set": ["active": false]])
+    if let oid = ObjectId(artifact._id) {
+      _ = try await db[mlModelsCol].updateOne(
+        where: "_id" == oid, to: ["$set": ["active": true]])
+    }
+    _ = try await db[mlModelsCol].updateOne(
+      where: "_id" == artifact._id, to: ["$set": ["active": true]])
   }
 
   public func deleteModelArtifact(id: String) async throws {
-    guard let oid = ObjectId(id) else { return }
-    if let current = try await db[mlModelsCol].findOne("_id" == oid) {
-      if let art = try? BSONDecoder().decode(MLModelArtifact.self, from: current) {
-        // Best-effort: remove the stored file
-        try? FileManager.default.removeItem(atPath: art.storedAt)
+    if let art = try await findModelArtifact(by: id) {
+      try? FileManager.default.removeItem(atPath: art.storedAt)
+    }
+    if let oid = ObjectId(id) {
+      _ = try await db[mlModelsCol].deleteOne(where: "_id" == oid)
+    }
+    _ = try await db[mlModelsCol].deleteOne(where: "_id" == id)
+  }
+
+  // MARK: - ML Train Jobs
+  public func upsertTrainJob(_ job: TrainJob) async throws {
+    var doc = try BSONEncoder().encode(job)
+    doc["_id"] = job.id
+    _ = try await db[mlTrainJobsCol].deleteOne(where: "_id" == job.id)
+    try await db[mlTrainJobsCol].insert(doc)
+  }
+
+  public func findTrainJob(by id: String) async throws -> TrainJob? {
+    if let doc = try await db[mlTrainJobsCol].findOne("_id" == id) {
+      return try? BSONDecoder().decode(TrainJob.self, from: doc)
+    }
+    if let doc = try await db[mlTrainJobsCol].findOne("id" == id) {
+      return try? BSONDecoder().decode(TrainJob.self, from: doc)
+    }
+    return nil
+  }
+
+  public func listTrainJobs(limit: Int) async throws -> [TrainJob] {
+    var result: [TrainJob] = []
+    for try await doc in db[mlTrainJobsCol].find() {
+      if let job = try? BSONDecoder().decode(TrainJob.self, from: doc) {
+        result.append(job)
       }
     }
-    _ = try await db[mlModelsCol].deleteOne(where: "_id" == oid)
+    return Array(result.sorted { $0.createdAt > $1.createdAt }.prefix(max(1, limit)))
+  }
+
+  public func pruneTrainJobs(keepLast: Int, maxAgeDays: Int) async throws {
+    let jobs = try await listTrainJobs(limit: 10_000)
+    let cutoff = Date().addingTimeInterval(-Double(max(1, maxAgeDays)) * 86_400)
+    let keepNewest = Set(jobs.prefix(max(1, keepLast)).map(\.id))
+    for job in jobs {
+      let beyondCap = !keepNewest.contains(job.id)
+      let tooOld = job.createdAt < cutoff && !keepNewest.contains(job.id)
+      if beyondCap || tooOld {
+        _ = try await db[mlTrainJobsCol].deleteOne(where: "_id" == job.id)
+      }
+    }
   }
 }

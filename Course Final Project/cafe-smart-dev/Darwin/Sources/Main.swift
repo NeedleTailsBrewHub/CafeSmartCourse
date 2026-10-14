@@ -12,7 +12,25 @@ private typealias AppDelegate = CafeSmartDevAppDelegate
     var body: some Scene {
         WindowGroup {
             AppRootView()
+                #if os(macOS)
+                .frame(minWidth: 980, minHeight: 680)
+                #endif
         }
+        #if os(macOS)
+        .defaultSize(width: 1180, height: 760)
+        .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified)
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .toolbar) {
+                Button("Refresh") {
+                    NotificationCenter.default.post(name: .cafeSmartRefresh, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
+        }
+        #endif
         .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .active:
@@ -27,6 +45,12 @@ private typealias AppDelegate = CafeSmartDevAppDelegate
         }
     }
 }
+
+#if os(macOS)
+extension Notification.Name {
+    static let cafeSmartRefresh = Notification.Name("cafeSmartRefresh")
+}
+#endif
 
 #if canImport(UIKit)
 typealias AppDelegateAdaptor = UIApplicationDelegateAdaptor

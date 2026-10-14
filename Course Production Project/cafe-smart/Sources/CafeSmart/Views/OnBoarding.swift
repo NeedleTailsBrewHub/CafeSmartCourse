@@ -14,6 +14,7 @@
 //
 
 import SwiftUI
+import VenueSmartKit
 
 struct OnBoarding: View {
     
@@ -21,62 +22,50 @@ struct OnBoarding: View {
 #if os(iOS)
     @Environment(\.dismiss) var dismiss
 #endif
-#if os(Android)
-    let buttonImageName = "android_coffee_cup"
-#else
-    let buttonImageName = "cup.and.saucer.fill"
-#endif
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: AppSpacing.lg) {
-                HStack(alignment: .top) {
-                    Image("Logo", bundle: .module)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 50, height: 50)
-                        .clipShape(Circle())
-                        .padding()
+            ZStack {
+                Color.groupedBackgroundColor.ignoresSafeArea()
+                Image("Welcome", bundle: .module)
+                    .resizable()
+                    .scaledToFill()
+                    .opacity(0.18)
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer(minLength: AppSpacing.xl)
+                    BrandAvatar(size: 104)
+
+                    Text("CaféSmart")
+                        .font(AppFont.largeTitle())
+                        .multilineTextAlignment(.center)
+
+                    Text("Order ahead. Skip the line.")
+                        .font(AppFont.title2())
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, AppSpacing.lg)
+
+                    Text("Pickup coffee and food, track orders, and run the café floor.")
+                        .font(AppFont.subheadline())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, AppSpacing.xl)
+
                     Spacer()
-                }
-                Spacer(minLength: AppSpacing.lg)
-                
-                CardContainer(padding: AppSpacing.md) {
-                    Image("Welcome", bundle: .module)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 220)
-                        .accessibilityLabel("Team managing café with tablet")
-                }
-                .padding(.horizontal, AppSpacing.lg)
-                
-                VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                    Text("Where Every Cup’s a Clever Choice")
-                        .font(AppFont.title())
-                        .foregroundStyle(Color.primary)
-                    
-                    Text("Efficient Orders, Seamless Reservations, Accurate Inventory—All at Your Fingertips")
-                        .font(AppFont.subtitle())
-                        .foregroundStyle(Color.secondary)
-                }
-                .padding(.horizontal, AppSpacing.lg)
-                
-                Spacer()
-                
-                PrimaryNavigationLink(title: "Continue", fillWidth: true) {
-                    AuthenticationView()
-                }
+
+                    PrimaryNavigationLink(title: "Continue", fillWidth: true) {
+                        AuthenticationView()
+                    }
                     .padding(.horizontal, AppSpacing.lg)
-                
-                Spacer(minLength: AppSpacing.lg)
+                    .padding(.bottom, AppSpacing.xl)
+                }
             }
         }
-        // Navigation is handled by ContentView switching to Home when didSignIn changes
 #if os(iOS)
         .onChange(of: authenticationViewModel.didSignIn) { _, value in
-            if value {
-                dismiss()
-            }
+            if value { dismiss() }
         }
 #endif
     }

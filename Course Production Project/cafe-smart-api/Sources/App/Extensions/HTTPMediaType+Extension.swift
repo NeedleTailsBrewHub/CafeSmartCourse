@@ -16,7 +16,7 @@
 import Vapor
 
 extension HTTPMediaType {
-  public static var bson: HTTPMediaType {
-    HTTPMediaType(type: "application", subType: "bson")
+  public static var binaryCodable: HTTPMediaType {
+    HTTPMediaType(type: "application", subType: "x-binary-codable")
   }
 }

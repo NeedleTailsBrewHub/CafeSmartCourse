@@ -14,35 +14,63 @@
 
 import Foundation
 import Vapor
-import BSON
 
 public struct RecipeComponent: Codable, Sendable, Equatable {
 	public var sku: String
 	public var unitsPerItem: Double
 	public var wastageRate: Double?
+
+	public init(sku: String, unitsPerItem: Double, wastageRate: Double? = nil) {
+		self.sku = sku
+		self.unitsPerItem = unitsPerItem
+		self.wastageRate = wastageRate
+	}
 }
 
-public struct Recipe: Content, Sendable, Equatable, BSONResponseEncodable {
+public struct Recipe: Content, Sendable, Equatable, BinaryResponseEncodable {
 	public var id: String
 	public var menuItemId: String
 	public var components: [RecipeComponent]
 	public var createdAt: Date
+
+	public init(id: String, menuItemId: String, components: [RecipeComponent], createdAt: Date) {
+		self.id = id
+		self.menuItemId = menuItemId
+		self.components = components
+		self.createdAt = createdAt
+	}
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-public struct RecipesWrapper: Content, Sendable, Equatable, BSONResponseEncodable {
+public struct RecipesWrapper: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [Recipe]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
+}
+
+/// Wire name must match VenueSmartCore `CreateRecipeRequest`.
+public struct CreateRecipeRequest: Content, Sendable, Equatable {
+	public var menuItemId: String
+	public var components: [RecipeComponent]
+
+	public init(menuItemId: String, components: [RecipeComponent]) {
+		self.menuItemId = menuItemId
+		self.components = components
+	}
+}
+
+/// Wire name must match VenueSmartCore `UpdateRecipeRequest`.
+public struct UpdateRecipeRequest: Content, Sendable, Equatable {
+	public var components: [RecipeComponent]?
+
+	public init(components: [RecipeComponent]?) {
+		self.components = components
+	}
 }
 
 

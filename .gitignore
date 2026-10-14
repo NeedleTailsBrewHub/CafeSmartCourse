@@ -50,6 +50,11 @@ Package.resolved
 # Swift Package Manager build artifacts
 .build/
 
+# Local TLS PEMs (generate via cafe-smart-api/scripts/gen-dev-certs.sh)
+Course Production Project/cafe-smart-api/certs/*.pem
+Course Production Project/cafe-smart-api/certs/*.key
+Course Production Project/cafe-smart-api/certs/*.crt
+
 # Swift Package Manager additional patterns
 .swiftpm/xcode/package.xcworkspace
 .swiftpm/xcode/workspace-state.xcworkspacedata
@@ -437,9 +442,14 @@ default.profraw
 # Project data/models (if they contain large files)
 # Core ML models and generated files (not Swift source Models)
 **/Models/coreml/
+**/Models/onnx/
 **/Models/*.mlmodel
 **/Models/*.mlmodelc
 **/Models/.tmp-*
+
+# Local Python trainer venv (created on API launch / Docker)
+**/Trainer/.venv/
+**/Trainer/__pycache__/
 
 # Exported data patterns
 CafeEvents_*.ndjson

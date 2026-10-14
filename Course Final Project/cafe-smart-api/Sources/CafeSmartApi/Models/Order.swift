@@ -14,7 +14,6 @@
 
 import Foundation
 import Vapor
-import BSON
 
 public enum OrderStatus: String, Codable, Sendable, Equatable {
     case pending
@@ -26,11 +25,20 @@ public enum OrderStatus: String, Codable, Sendable, Equatable {
 
 public struct OrderItem: Content, Sendable, Equatable {
     public var menuItemId: String
+    /// Optional display name from client carts; ignored by inventory math.
+    public var name: String?
     public var quantity: Int
     public var notes: String?
+
+    public init(menuItemId: String, name: String? = nil, quantity: Int, notes: String? = nil) {
+        self.menuItemId = menuItemId
+        self.name = name
+        self.quantity = quantity
+        self.notes = notes
+    }
 }
 
-public struct Order: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct Order: Content, Sendable, Equatable, BinaryResponseEncodable {
     public enum OrderChannel: String, Codable, Sendable, Equatable { case dineIn, takeaway, pickup, delivery }
     public enum ServiceType: String, Codable, Sendable, Equatable { case barista, kitchen, bakery }
 
@@ -45,36 +53,90 @@ public struct Order: Content, Sendable, Equatable, AsyncResponseEncodable {
     public var guests: Int?
     public var reservationId: String?
     public var createdAt: Date
-    
-    
+
+    public init(
+        id: String,
+        status: OrderStatus,
+        customerName: String? = nil,
+        items: [OrderItem],
+        pickupTime: Date? = nil,
+        channel: OrderChannel? = nil,
+        serviceType: ServiceType? = nil,
+        tableId: String? = nil,
+        guests: Int? = nil,
+        reservationId: String? = nil,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.status = status
+        self.customerName = customerName
+        self.items = items
+        self.pickupTime = pickupTime
+        self.channel = channel
+        self.serviceType = serviceType
+        self.tableId = tableId
+        self.guests = guests
+        self.reservationId = reservationId
+        self.createdAt = createdAt
+    }
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-
-
-
-public struct OrderCreateRequest: Content, Sendable {
+/// Wire name matches client `CreateOrderRequest` for BinaryCodable type headers.
+public struct CreateOrderRequest: Content, Sendable {
     public var customerName: String?
     public var items: [OrderItem]
     public var pickupTime: Date?
+    public var channel: Order.OrderChannel?
+    public var serviceType: Order.ServiceType?
+    public var tableId: String?
+    public var guests: Int?
+    public var reservationId: String?
+
+    public init(
+        customerName: String? = nil,
+        items: [OrderItem],
+        pickupTime: Date? = nil,
+        channel: Order.OrderChannel? = nil,
+        serviceType: Order.ServiceType? = nil,
+        tableId: String? = nil,
+        guests: Int? = nil,
+        reservationId: String? = nil
+    ) {
+        self.customerName = customerName
+        self.items = items
+        self.pickupTime = pickupTime
+        self.channel = channel
+        self.serviceType = serviceType
+        self.tableId = tableId
+        self.guests = guests
+        self.reservationId = reservationId
+    }
 }
 
-public struct OrderStatusUpdateRequest: Content, Sendable {
+@available(*, deprecated, renamed: "CreateOrderRequest")
+public typealias OrderCreateRequest = CreateOrderRequest
+
+/// Wire name matches client `UpdateOrderStatusRequest` for BinaryCodable type headers.
+public struct UpdateOrderStatusRequest: Content, Sendable {
     public var status: OrderStatus
+
+    public init(status: OrderStatus) {
+        self.status = status
+    }
 }
 
+@available(*, deprecated, renamed: "UpdateOrderStatusRequest")
+public typealias OrderStatusUpdateRequest = UpdateOrderStatusRequest
 
-public struct OrdersWrapper: Content, Sendable, Equatable, AsyncResponseEncodable {
+
+public struct OrdersWrapper: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [Order]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }

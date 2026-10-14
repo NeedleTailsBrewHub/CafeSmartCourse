@@ -7,7 +7,6 @@
 
 import Foundation
 import Vapor
-import BSON
 
 public struct User: Content, Sendable, Equatable {
     public var id: String
@@ -20,12 +19,10 @@ public struct User: Content, Sendable, Equatable {
 }
 
 
-struct UsersWrapper: Content, Sendable, AsyncResponseEncodable {
+struct UsersWrapper: Content, Sendable, BinaryResponseEncodable {
     public var items: [UserPublic]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }

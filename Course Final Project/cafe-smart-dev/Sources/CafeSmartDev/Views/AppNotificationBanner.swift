@@ -1,16 +1,6 @@
 //
 //  AppNotificationBanner.swift
-//  CafeSmart
-//
-//  Created by NeedleTails on 8/19/25
-//
-//  Copyright (c) 2025 NeedleTails Organization.
-//
-//  This project is proprietary and confidential.
-//
-//  MIT License
-//
-//  This file is part of the CafeSmart Project
+//  CafeSmartDev
 //
 
 import SwiftUI
@@ -25,38 +15,61 @@ struct AppNotificationBanner: View {
                 HStack {
                     Spacer()
                     banner
-                        .frame(width: 320)
-                        .transition(.opacity)
+                        .frame(width: 340)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                         .zIndex(1000)
                 }
                 #else
                 banner
-                    .transition(.opacity)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(1000)
                 #endif
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: center.isPresented)
-#if !os(Android)
-        .padding(.top, 60)
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: center.isPresented)
+#if os(macOS)
+        .padding(.top, 8)
+#elseif os(Android)
+        .padding(.top, 28)
 #else
-        .padding(.top, 30)
+        .padding(.top, 12)
+        .safeAreaPadding(.top, 4)
 #endif
-        .ignoresSafeArea(.container, edges: .top)
     }
     
+    private var bannerTint: Color {
+        let icon = center.iconSystemName ?? ""
+        if icon.contains("xmark") || icon.contains("exclamation") {
+            return Color.orange.opacity(0.95)
+        }
+        if icon.contains("trash") {
+            return Color.red.opacity(0.9)
+        }
+        if icon.contains("checkmark") || icon.contains("seal") {
+            return Color.appColor
+        }
+        return Color.black.opacity(0.88)
+    }
+
     private var banner: some View {
-        Text(center.message)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .multilineTextAlignment(.center)
-            .lineLimit(2)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 16)
-            .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .padding(.horizontal, 12)
+        HStack(spacing: AppSpacing.sm) {
+            if let icon = center.iconSystemName, !icon.isEmpty {
+                AppImage(name: icon)
+                    .foregroundStyle(.white)
+            }
+            Text(center.message)
+                .font(AppFont.footnote())
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.leading)
+                .lineLimit(3)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .background(bannerTint)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(center.message)
     }
 }
-
-

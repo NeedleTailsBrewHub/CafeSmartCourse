@@ -10,7 +10,7 @@ import MongoKitten
 actor OrderController {
     
     func create(req: Request) async throws -> Order {
-        let create = try req.content.decode(OrderCreateRequest.self)
+        let create = try req.content.decode(CreateOrderRequest.self)
         
         guard !create.items.isEmpty else {
             throw Abort(.badRequest, reason: "Order must contain at least one item")
@@ -22,6 +22,11 @@ actor OrderController {
             customerName: create.customerName,
             items: create.items,
             pickupTime: create.pickupTime,
+            channel: create.channel,
+            serviceType: create.serviceType,
+            tableId: create.tableId,
+            guests: create.guests,
+            reservationId: create.reservationId,
             createdAt: Date())
         
         let created = try await req.store.create(order: order)
@@ -46,7 +51,7 @@ actor OrderController {
     }
     
     func updateStatus(req: Request) async throws -> Order {
-        let body = try req.content.decode(OrderStatusUpdateRequest.self)
+        let body = try req.content.decode(UpdateOrderStatusRequest.self)
         guard let id = req.parameters.get("id") else {
             throw Abort(.badRequest)
         }

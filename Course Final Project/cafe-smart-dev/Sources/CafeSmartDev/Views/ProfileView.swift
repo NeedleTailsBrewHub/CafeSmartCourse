@@ -1,6 +1,6 @@
 //
 //  ProfileView.swift
-//  CafeSmart
+//  CafeSmartDev
 //
 //  Created by NeedleTails on 8/19/25
 //
@@ -17,6 +17,7 @@ import SwiftUI
 
 struct ProfileView: View {
     @Environment(AuthenticationViewModel.self) var authenticationViewModel
+    @Environment(AppNotificationCenter.self) var appNotificationCenter
     @Environment(\.dismiss) var dismiss
     
     @State var oldPassword: String = ""
@@ -24,63 +25,59 @@ struct ProfileView: View {
     @State var confirmPassword: String = ""
     @State var showAlert = false
     @State var alertMessage = ""
+    @State var showDeleteConfirm = false
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: AppSpacing.lg) {
-                SectionHeader(
-                    title: "Profile",
-                    subtitle: authenticationViewModel.user?.email ?? "")
-                
-                CardContainer(
-                    padding: AppSpacing.lg,
-                    cornerRadius: 16,
-                    backgroundColor: .surfaceColor,
-                    borderColor: .gray.opacity(0.15),
-                    borderWidth: 1,
-                    shadowEnabled: true,
-                    shadowColor: .black.opacity(0.05),
-                    shadowRadius: 10,
-                    shadowX: 0,
-                    shadowY: 6) {
-                        VStack(alignment: .leading, spacing: AppSpacing.md) {
-                            Text("Security")
-                                .font(AppFont.headline())
-                            HStack(spacing: AppSpacing.sm) { Image(systemName: "lock.fill"); AppSecureField(placeholder: "Current password", text: $oldPassword, showsRevealToggle: true) }
-                            HStack(spacing: AppSpacing.sm) { Image(systemName: "lock.fill"); AppSecureField(placeholder: "New password", text: $newPassword, showsRevealToggle: true) }
-                            HStack(spacing: AppSpacing.sm) { Image(systemName: "lock.fill"); AppSecureField(placeholder: "Confirm new password", text: $confirmPassword, showsRevealToggle: true) }
-                            PrimaryButton(title: "Change password", fillWidth: true) {
-                                changePassword()
-                            }
-                        }
+        ScreenCanvas {
+            HStack(spacing: AppSpacing.md) {
+                BrandAvatar(size: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(authenticationViewModel.user?.name
+                         ?? authenticationViewModel.user?.email
+                         ?? "Guest")
+                        .font(AppFont.title2())
+                        .lineLimit(1)
+                    Text(authenticationViewModel.user?.email ?? "")
+                        .font(AppFont.subheadline())
+                        .foregroundStyle(.secondary)
+                    if authenticationViewModel.user?.isAdmin == true {
+                        StatusChip(text: "Merchant", tone: .accent)
                     }
-                
-                CardContainer(
-                    padding: AppSpacing.lg,
-                    cornerRadius: 16,
-                    backgroundColor: .surfaceColor,
-                    borderColor: .gray.opacity(0.15),
-                    borderWidth: 1,
-                    shadowEnabled: true,
-                    shadowColor: .black.opacity(0.05),
-                    shadowRadius: 10,
-                    shadowX: 0,
-                    shadowY: 6) {
-                        VStack(alignment: .leading, spacing: AppSpacing.md) {
-                            Text("Account")
-                                .font(AppFont.headline())
-                            PrimaryButton(title: "Sign out", fillWidth: true) {
-                                signOut()
-                            }
-                            PrimaryButton(title: "Delete account", fillWidth: true) {
-                                deleteAccount()
-                            }
-                        }
-                    }
+                }
+                Spacer(minLength: 0)
             }
-            .padding()
+
+            PanelSection(title: "Security", subtitle: "Update your password") {
+                VStack(alignment: .leading, spacing: AppSpacing.md) {
+                    AppSecureField(placeholder: "Current password", text: $oldPassword, showsRevealToggle: true)
+                    AppSecureField(placeholder: "New password", text: $newPassword, showsRevealToggle: true)
+                    AppSecureField(placeholder: "Confirm new password", text: $confirmPassword, showsRevealToggle: true)
+                    PrimaryButton(title: "Change password", fillWidth: true) {
+                        changePassword()
+                    }
+                }
+            }
+
+            PanelSection(title: "Account", subtitle: "Session and data") {
+                VStack(alignment: .leading, spacing: AppSpacing.md) {
+                    SecondaryButton(title: "Sign out", fillWidth: true) {
+                        signOut()
+                    }
+                    DestructiveButton(title: "Delete account", fillWidth: true) {
+                        showDeleteConfirm = true
+                    }
+                }
+            }
         }
         .alert(alertMessage, isPresented: $showAlert) { }
+        .confirmationDialog(
+            "Delete your account? This cannot be undone.",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete account", role: .destructive) { deleteAccount() }
+            Button("Cancel", role: .cancel) {}
+        }
         .navigationTitle("Profile")
     }
     
@@ -89,7 +86,9 @@ struct ProfileView: View {
               !newPassword.isEmpty,
               newPassword == confirmPassword,
               let email = authenticationViewModel.user?.email else {
-            alertMessage = "Please fill all fields and ensure passwords match."; showAlert = true; return
+            alertMessage = "Please fill all fields and ensure passwords match."
+            showAlert = true
+            return
         }
         Task { @MainActor in
             do {
@@ -98,26 +97,28 @@ struct ProfileView: View {
                     oldPassword: oldPassword,
                     newPassword: newPassword)
                 
-                alertMessage = "Password updated"; showAlert = true
+                alertMessage = "Password updated"
+                showAlert = true
                 oldPassword = ""
                 newPassword = ""
                 confirmPassword = ""
                 
             } catch {
-                alertMessage = "Failed to update password"; showAlert = true
+                alertMessage = "Failed to update password"
+                showAlert = true
             }
         }
     }
     
     private func signOut() {
         authenticationViewModel.signOut()
+        appNotificationCenter.reset()
         dismiss()
     }
     
     private func deleteAccount() {
         authenticationViewModel.deleteAccountLocally()
+        appNotificationCenter.reset()
         dismiss()
     }
 }
-
-

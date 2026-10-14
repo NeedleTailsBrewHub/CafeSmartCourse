@@ -1,6 +1,6 @@
 //
 //  MenuPricingView.swift
-//  CafeSmart
+//  CafeSmartDev
 //
 //  Created by NeedleTails on 8/19/25
 //
@@ -20,44 +20,33 @@ struct MenuPricingView: View {
 
     @State var items: [MenuItem] = []
     @State var originalById: [String: MenuItem] = [:]
-    @State var availableWidth: CGFloat = 0
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: AppSpacing.lg) {
-                if let err = menuViewModel.errorMessage, !err.isEmpty {
-                    Text(err)
-                        .font(AppFont.footnote())
-                        .foregroundStyle(.red)
-                        .padding(10)
-                        .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                SectionHeader(title: "Menu & pricing", subtitle: "Quick edits")
+        ScreenCanvas {
+            SectionHeader(
+                title: "Menu & pricing",
+                subtitle: "Edit names, prices, and availability")
+
+            if let err = menuViewModel.errorMessage, !err.isEmpty {
+                ErrorBanner(message: err)
+            }
+
+            if menuViewModel.isLoading {
+                LoadingBlock()
+            } else if items.isEmpty {
+                EmptyState(
+                    title: "No menu items yet",
+                    subtitle: "Pricing edits appear after menu sync."
+                )
+            } else {
                 LazyVStack(spacing: AppSpacing.md) {
-                    if menuViewModel.isLoading {
-                        ProgressView()
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .center)
-                    }
-                    if items.isEmpty && !menuViewModel.isLoading {
-                        Text("No menu items yet.")
-                            .font(AppFont.subheadline())
-                            .foregroundStyle(.secondary)
-                            .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .center)
-                    }
                     ForEach(items.indices, id: \.self) { idx in
-                        CardContainer(
-                            padding: AppSpacing.md, cornerRadius: 16, backgroundColor: .surfaceColor,
-                            borderColor: .gray.opacity(0.15), borderWidth: 1, shadowEnabled: true,
-                            shadowColor: .black.opacity(0.05), shadowRadius: 10, shadowX: 0,
-                            shadowY: 6
-                        ) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .center) {
-                                    TextField("Item name", text: $items[idx].name)
-                                        .font(AppFont.body())
-                                    Spacer()
+                        SurfacePanel {
+                            VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                                TextField("Item name", text: $items[idx].name)
+                                    .font(AppFont.body())
+
+                                AdaptiveDetailRow {
                                     TextField(
                                         "0.00",
                                         value: Binding<Double>(
@@ -69,50 +58,34 @@ struct MenuPricingView: View {
                                         format: .currency(
                                             code: Locale.current.currency?.identifier ?? "USD")
                                     )
-                                    .multilineTextAlignment(.trailing)
-//                                    .keyboardType(.decimalPad)
                                     .font(AppFont.body())
-                                    .frame(width: 120)
-                                    Toggle("", isOn: $items[idx].isAvailable).labelsHidden()
+                                    .frame(maxWidth: 160, alignment: .leading)
+                                } actions: {
+                                    Toggle("Available", isOn: $items[idx].isAvailable)
+                                        .font(AppFont.footnote())
                                 }
+
                                 HStack(spacing: 8) {
                                     if let category = items[idx].category, !category.isEmpty {
-                                        Text(category)
-                                            .font(AppFont.footnote())
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 4)
-                                            .background(Color.gray.opacity(0.12))
-                                            .clipShape(Capsule())
+                                        StatusChip(text: category, tone: .neutral)
                                     }
                                     if let prep = items[idx].prepSeconds, prep > 0 {
-                                        Text("Prep \(max(1, prep/60))m")
-                                            .font(AppFont.footnote())
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 4)
-                                            .background(Color.blue.opacity(0.12))
-                                            .clipShape(Capsule())
+                                        StatusChip(text: "Prep \(max(1, prep/60))m", tone: .accent)
                                     }
                                     if let allergens = items[idx].allergens, !allergens.isEmpty {
-                                        Text("Allergens \(allergens.count)")
-                                            .font(AppFont.footnote())
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 4)
-                                            .background(Color.orange.opacity(0.12))
-                                            .clipShape(Capsule())
+                                        StatusChip(text: "Allergens \(allergens.count)", tone: .warning)
                                     }
                                 }
                             }
                         }
-                        .frame(minWidth: 0, maxWidth: availableWidth > 0 ? availableWidth : .infinity, alignment: .leading)
                     }
+
                     PrimaryButton(title: "Save changes", fillWidth: true) {
                         saveChangesAsync()
                     }
                 }
             }
-            .padding()
         }
-        .captureWidth(in: $availableWidth)
         .onAppear {
             items = menuViewModel.items
             originalById = Dictionary(uniqueKeysWithValues: menuViewModel.items.map { ($0.id, $0) })

@@ -103,5 +103,3 @@ extension Application {
         self.mongoDB = try await MongoDatabase.connect(to: connectionString)
     }
 }
-
-extension SymmetricKey: @retroactive @unchecked Sendable {}

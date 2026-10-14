@@ -39,9 +39,9 @@ Notes
 ### Orders
 
 - GET `/orders` → OrdersWrapper
-- POST `/orders` → OrderCreateRequest → Order
+- POST `/orders` → CreateOrderRequest → Order
 - GET `/orders/:id` → Order
-- PATCH `/orders/:id/status` (admin) → { status } → Order
+- PATCH `/orders/:id/status` (admin) → UpdateOrderStatusRequest → Order
 - DELETE `/orders/:id` (admin)
 
 Notes
@@ -93,46 +93,46 @@ Tables (admin)
 
 ### Predictor (ML, admin)
 
-Forecast persistence
-- GET `/predictor/latest` → persisted forecast points
-- POST `/predictor/generate` → { horizonDays } → PredictorResponse
+Dual training (same feature CSV for both paths)
+- **Server:** `POST /predictor/train` `{ "kind": "restockDaily"|"workloadHourly"|"reservationsHourly" }` → Python → ONNX
+- **Local (Mac app):** export CSV → Create ML → `POST /predictor/models/upload?runtime=coreml&kind=…`
+- `reservationDuration` train → `400` (not wired)
+- Create ML CoreML and sklearn ONNX are **not bit-identical**; one active runtime per kind
 
 Dataset export (CSV)
 - GET `/predictor/export?dataset=...` → CSV download
-  - Supported datasets:
-    - `workloadhourly`: target `target_orders_total` (hourly)
-    - `reservationshourly`: target `target_reservations_total` (hourly)
-    - `restockdaily`: target `target_qty_<menuItemId>` (daily per menu item)
-      - Optional: `menuItemId=<id>`
-    - `ingredientdaily`: target `target_usage` (daily per SKU)
-      - Optional: `sku=<sku>`
-    - `reservationduration`: target `target_duration_minutes` (per reservation)
-- Filenames:
-  - workload: `workload_hourly.csv`
-  - reservations: `reservations_hourly.csv`
-  - restock: `inv_<menuItemId>_daily.csv` or `restock_daily.csv`
-  - ingredient: `ingredient_<sku>_daily.csv` or `ingredient_all_daily.csv`
-  - reservation duration: `reservation_duration.csv`
+  - `ingredientDaily` → `target_usage` (SKU × day; optional `sku=`)
+  - `ordersHourly` → `target_orders` (cafe × hour)
+  - `reservationsHourly` → `target_covers` (covers × hour)
 
 Model management
-- POST `/predictor/models/upload` (Content-Type: application/octet-stream)
-  - Query: `name?`, `runtime?` (onnx|coreml), `kind?` (`workloadHourly|reservationsHourly|restockDaily|reservationDuration`)
-  - Returns: stored artifact metadata
-- GET `/predictor/models` → list artifacts
-- POST `/predictor/models/activate` → { id }
-- POST `/predictor/models/delete` → { id }
-- POST `/predictor/instantiate` → { kind }
+- POST `/predictor/models/upload` (octet-stream) query `name?`, `runtime?` (onnx|coreml), `kind?`
+- GET `/predictor/models`, POST activate/delete, POST instantiate, GET capabilities
 
-Minimal forecast (testing helpers)
-- POST `/predictor/forecast/workload-hourly` → { hoursAhead }
-- POST `/predictor/forecast/reservations-hourly` → { hoursAhead }
-- POST `/predictor/forecast/restock-daily` → { daysAhead }
+Server trainers (by kind)
+- `restockDaily` → `Trainer/train_restock.py`
+- `workloadHourly` → `Trainer/train_busy_hour.py`
+- `reservationsHourly` → `Trainer/train_reservations_hour.py`
+- Env: `TRAINER_PYTHON`, optional `TRAINER_SCRIPT` override (restock default), `MODEL_RETENTION_COUNT`
+- Active predictors reloaded on boot; ONNX Runtime (CONNX) required for server train/infer on Linux
 
 Restock decision
-- POST `/predictor/restock/decide` → { sku, daysAhead? } → {
-  needRestock, reorderQty, reorderPoint, leadTimeDays, onHand, forecastSumNextLeadTime
-}
-- Logic: needRestock = onHand <= (safetyStock + sum(forecast next leadTimeDays))
+- POST `/predictor/restock/decide` → { sku, daysAhead? } → needRestock, reorderQty, reorderPoint, leadTimeDays, onHand, forecastSumNextLeadTime, predictedSpendCents?, busynessScale?, unitCostCents?
+- Forecast series uses **rolling** lag features (recursive one-step)
+- Usage derived from orders × recipes (not a separate ledger)
+
+Reports (admin)
+- GET `/reports/summary?from&to` — finance: net sales = completed+paid − loyalty; COGS on completed; labor; contribution = net − COGS − labor
+- GET `/reports/orders?from&to` — order drill-down rows
+- GET `/reports/export?from&to&dataset=` — accounting CSV (`summary` | `byDay` | `orders` | `salesByItem` | `cogsBySku` | `labor`); money as decimal currency
+- GET `/reports/demand?days=` — busyness + staffing + stock $ via **live** `workloadHourly` `predictMultiple` when loaded (`source=model`); else weekday×hour historical prior
+- Stock outlook `busynessScale` = predicted avg orders over lead window ÷ historical baseline (clamped 0.75…1.75)
+
+Reservations availability
+- Slot `busynessIndex` / `recommended` prefer combined workload + reservations hourly forecasts when predictors are loaded; else historical order counts
+
+Restock `busynessScale`
+- `POST /predictor/restock/decide` multiplies lead-time SKU demand by cafe-wide workload scale before ROP / reorder qty
 
 ### Realtime WebSockets
 
@@ -154,9 +154,9 @@ In-memory test store:
 - Enable test store: `USE_TEST_STORE=true`
 - Seed data: `SEED_TEST_DATA=true` (must be literal "true")
 - Volume controls (optional):
-  - `DUMMY_DAYS_BACK`: default 180
-  - `DUMMY_BASE_ORDERS_MIN`: default 4
-  - `DUMMY_BASE_ORDERS_MAX`: default 10
+  - `DUMMY_DAYS_BACK`: default 90
+  - `DUMMY_BASE_ORDERS_MIN`: default 2
+  - `DUMMY_BASE_ORDERS_MAX`: default 5
   - `DUMMY_MAX_ITEMS_PER_ORDER`: default 3
 
 Example run:

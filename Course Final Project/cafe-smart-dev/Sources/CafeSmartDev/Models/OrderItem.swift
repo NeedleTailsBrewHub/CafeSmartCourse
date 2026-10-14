@@ -121,7 +121,7 @@ public struct UpdateOrderStatusRequest: Codable, Sendable, Equatable {
 }
 
 
-struct CartLine: Identifiable, Equatable {
+struct CartLine: Identifiable, Codable, Equatable {
     var id: String { item.id + "-" + String(sizeDeltaCents) }
     let item: MenuItem
     var quantity: Int

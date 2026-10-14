@@ -1,8 +1,6 @@
 //
 //  UITheme.swift
-//  cafe-smart-app
-//
-//  Created by Cole M on 9/8/25.
+//  CafeSmartDev
 //
 
 import SwiftUI
@@ -13,6 +11,98 @@ import UIKit
 import AppKit
 #endif
 
+// MARK: - Theme
+
+extension Color {
+    /// Brand accent — café teal that reads well in system light/dark chrome.
+    static let appColor = Color(red: 36/255, green: 110/255, blue: 118/255)
+
+    /// Warm secondary for food surfaces (chips, soft fills) without cream-page aesthetics.
+    static let appAccentWarm = Color(red: 176/255, green: 122/255, blue: 74/255)
+
+    static let appDanger = Color.red
+    static let appWarning = Color.orange
+    static let appSuccess = Color.green
+    static let appOnAccent = Color.white
+
+    static var backgroundColor: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.systemBackground)
+        #elseif canImport(AppKit)
+        return Color(nsColor: NSColor.windowBackgroundColor)
+        #else
+        return Color.white
+        #endif
+    }
+
+    static var surfaceColor: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.secondarySystemBackground)
+        #elseif canImport(AppKit)
+        return Color(nsColor: NSColor.controlBackgroundColor)
+        #else
+        return Color.white
+        #endif
+    }
+
+    static var groupedBackgroundColor: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.systemGroupedBackground)
+        #elseif canImport(AppKit)
+        return Color(nsColor: NSColor.windowBackgroundColor)
+        #else
+        return Color.white
+        #endif
+    }
+
+    static var separatorColor: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.separator)
+        #elseif canImport(AppKit)
+        return Color(nsColor: NSColor.separatorColor)
+        #else
+        return Color.gray.opacity(0.3)
+        #endif
+    }
+
+    static var elevatedSurfaceColor: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.tertiarySystemBackground)
+        #elseif canImport(AppKit)
+        return Color(nsColor: NSColor.textBackgroundColor)
+        #else
+        return Color.white
+        #endif
+    }
+}
+
+enum AppRadius {
+    /// Controls / fields — tighter on Mac for AppKit density.
+    static var control: CGFloat {
+        #if os(macOS)
+        8
+        #else
+        12
+        #endif
+    }
+
+    static var panel: CGFloat {
+        #if os(macOS)
+        10
+        #else
+        14
+        #endif
+    }
+
+    static var tile: CGFloat {
+        #if os(macOS)
+        12
+        #else
+        16
+        #endif
+    }
+}
+
 enum AppSpacing {
     static let xs: CGFloat = 6
     static let sm: CGFloat = 10
@@ -21,72 +111,73 @@ enum AppSpacing {
     static let xl: CGFloat = 32
 }
 
+enum AppMotion {
+    static let standardDuration: Double = 0.25
+    static let bannerSpringResponse: Double = 0.35
+    static let bannerSpringDamping: Double = 0.86
+
+    static var standard: Animation { .easeInOut(duration: standardDuration) }
+    static var banner: Animation {
+        .spring(response: bannerSpringResponse, dampingFraction: bannerSpringDamping)
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func appAnimation<V: Equatable>(_ animation: Animation, value: V) -> some View {
+        #if os(Android)
+        self.animation(animation, value: value)
+        #else
+        self.modifier(ReduceMotionAnimationModifier(animation: animation, value: value))
+        #endif
+    }
+}
+
+#if !os(Android)
+private struct ReduceMotionAnimationModifier<V: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let animation: Animation
+    let value: V
+
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : animation, value: value)
+    }
+}
+#endif
+
+/// Semantic text styles (Dynamic Type). No custom font files required for Skip.
 enum AppFont {
-    static func largeTitle() -> Font { .custom("Roboto-Bold", size: 34) }
-    static func title() -> Font { .custom("Roboto-Bold", size: 28) }
-    static func title2() -> Font { .custom("Roboto-Bold", size: 22) }
-    static func subtitle() -> Font { .custom("Roboto-Regular", size: 16) }
-    static func headline() -> Font { .custom("Roboto-Medium", size: 17) }
-    static func subheadline() -> Font { .custom("Roboto-Regular", size: 15) }
-    static func body() -> Font { .custom("Roboto-Regular", size: 16) }
-    static func callout() -> Font { .custom("Roboto-Regular", size: 15) }
-    static func footnote() -> Font { .custom("Roboto-Medium", size: 12) }
-    static func caption() -> Font { .custom("Roboto-Regular", size: 12) }
-    static func caption2() -> Font { .custom("Roboto-Regular", size: 11) }
-    static func button() -> Font { .custom("Roboto-Bold", size: 14) }
-    static func iconLarge() -> Font { .custom("Roboto-Bold", size: 44) }
+    static func largeTitle() -> Font { .largeTitle.weight(.bold) }
+    static func title() -> Font { .title.weight(.bold) }
+    static func title2() -> Font { .title2.weight(.semibold) }
+    static func subtitle() -> Font { .body }
+    static func headline() -> Font { .headline }
+    static func subheadline() -> Font { .subheadline }
+    static func body() -> Font { .body }
+    static func callout() -> Font { .callout }
+    static func footnote() -> Font { .footnote.weight(.medium) }
+    static func caption() -> Font { .caption }
+    static func caption2() -> Font { .caption2 }
+    static func button() -> Font { .subheadline.weight(.semibold) }
+    static func iconLarge() -> Font { .title.weight(.semibold) }
 }
 
-
-// MARK: - Theme
-extension Color {
-    static let appColor = Color(red: 31/255, green: 128/255, blue: 230/255)
-    static var backgroundColor: Color {
-#if canImport(UIKit)
-        return Color(UIColor.systemBackground)
-#elseif canImport(AppKit)
-        return Color(nsColor: NSColor.windowBackgroundColor)
-#else
-        return Color.white
-#endif
-    }
-    static var surfaceColor: Color {
-#if canImport(UIKit)
-        return Color(UIColor.secondarySystemBackground)
-#elseif canImport(AppKit)
-        return Color(nsColor: NSColor.controlBackgroundColor)
-#else
-        return Color.white
-#endif
-    }
-    static var separatorColor: Color {
-#if canImport(UIKit)
-        return Color(UIColor.separator)
-#elseif canImport(AppKit)
-        return Color(nsColor: NSColor.separatorColor)
-#else
-        return Color.gray.opacity(0.3)
-#endif
-    }
-}
+// MARK: - Reusable Components
 
 struct CardContainer<Content: View>: View {
     @Environment(\.colorScheme) var colorScheme
-    // Content
     let content: Content
-    
-    // Configurables
     let padding: CGFloat
     let cornerRadius: CGFloat
-    let backgroundColor: Color? // nil = no background
-    let borderColor: Color?     // nil = no border
+    let backgroundColor: Color?
+    let borderColor: Color?
     let borderWidth: CGFloat
     let shadowEnabled: Bool
     let shadowColor: Color
     let shadowRadius: CGFloat
     let shadowX: CGFloat
     let shadowY: CGFloat
-    
+
     init(
         padding: CGFloat = 0,
         cornerRadius: CGFloat = 0,
@@ -112,11 +203,11 @@ struct CardContainer<Content: View>: View {
         self.shadowY = shadowY
         self.content = content()
     }
-    
+
     var body: some View {
         let rounded = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let effectiveShadowColor = colorScheme == .dark ? shadowColor.opacity(0.25) : shadowColor
-        
+        let effectiveShadowColor = colorScheme == .dark ? shadowColor.opacity(0.22) : shadowColor
+
         content
             .padding(padding)
             .background(
@@ -151,7 +242,7 @@ struct PrimaryButton: View {
     var systemImageName: String? = nil
     var fillWidth: Bool = false
     var action: @MainActor () -> Void
-    
+
     init(
         title: String,
         systemImageName: String? = nil,
@@ -163,23 +254,32 @@ struct PrimaryButton: View {
         self.fillWidth = fillWidth
         self.action = action
     }
-    
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: AppSpacing.sm) {
                 if let systemImageName {
-                    Image(systemName: systemImageName)
+                    AppImage(name: systemImageName)
                 }
                 Text(title)
                     .font(AppFont.button())
             }
             .foregroundStyle(Color.white)
-            .padding(.vertical, 14)
-            .padding(.horizontal, fillWidth ? AppSpacing.lg : 0)
+            .padding(.vertical, 12)
+            .padding(.horizontal, fillWidth ? AppSpacing.lg : AppSpacing.md)
             .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
             .background(Color.appColor)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.appColor.opacity(colorScheme == .dark ? 0.2 : 0.35), radius: 16, x: 0, y: 8)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+            #if os(macOS)
+            .shadow(color: .clear, radius: 0)
+            #else
+            .shadow(
+                color: Color.appColor.opacity(colorScheme == .dark ? 0.18 : 0.28),
+                radius: 10,
+                x: 0,
+                y: 4
+            )
+            #endif
         }
         .buttonStyle(.plain)
         .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
@@ -191,7 +291,7 @@ struct PrimaryNavigationLink<Destination: View>: View {
     var systemImageName: String? = nil
     let destination: Destination
     var fillWidth: Bool = false
-    
+
     init(
         title: String,
         systemImageName: String? = nil,
@@ -203,59 +303,167 @@ struct PrimaryNavigationLink<Destination: View>: View {
         self.fillWidth = fillWidth
         self.destination = destination()
     }
-    
+
     var body: some View {
         NavigationLink(destination: destination) {
             HStack(spacing: AppSpacing.sm) {
                 if let systemImageName {
-                    Image(systemName: systemImageName)
+                    AppImage(name: systemImageName)
                 }
                 Text(title)
                     .font(AppFont.button())
             }
             .foregroundStyle(Color.white)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
             .background(Color.appColor)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.appColor.opacity(0.35), radius: 16, x: 0, y: 8)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 }
 
+struct SecondaryButton: View {
+    let title: String
+    var fillWidth: Bool = false
+    var action: @MainActor () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(AppFont.button())
+                .foregroundStyle(Color.appColor)
+                .padding(.vertical, 12)
+                .padding(.horizontal, fillWidth ? AppSpacing.lg : AppSpacing.md)
+                .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
+                .background(Color.appColor.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
+    }
+}
+
+struct DestructiveButton: View {
+    let title: String
+    var fillWidth: Bool = false
+    var action: @MainActor () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            Text(title)
+                .font(AppFont.button())
+                .foregroundStyle(Color.white)
+                .padding(.vertical, 12)
+                .padding(.horizontal, fillWidth ? AppSpacing.lg : AppSpacing.md)
+                .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
+                .background(Color.red.opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: 0, maxWidth: fillWidth ? .infinity : nil, alignment: .center)
+    }
+}
+
+struct ErrorBanner: View {
+    let message: String
+    var body: some View {
+        HStack(alignment: .top, spacing: AppSpacing.sm) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.red)
+                .frame(width: 3)
+            Text(message)
+                .font(AppFont.footnote())
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(Color.red.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+        .accessibilityLabel(message)
+    }
+}
+
+struct EmptyState: View {
+    let title: String
+    var subtitle: String = ""
+    var systemImage: String? = nil
+    var actionTitle: String? = nil
+    var action: (@MainActor () -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: AppSpacing.md) {
+            if let systemImage {
+                ZStack {
+                    Circle()
+                        .fill(Color.appColor.opacity(0.12))
+                        .frame(width: 72, height: 72)
+                    AppImage(name: systemImage)
+                        .font(AppFont.iconLarge())
+                        .foregroundStyle(Color.appColor)
+                }
+            }
+            Text(title)
+                .font(AppFont.headline())
+                .multilineTextAlignment(.center)
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(AppFont.subheadline())
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if let actionTitle, let action {
+                SecondaryButton(title: actionTitle, fillWidth: false, action: action)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, AppSpacing.xl)
+    }
+}
+
+struct LoadingBlock: View {
+    var body: some View {
+        ProgressView()
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, AppSpacing.xl)
+            .accessibilityLabel("Loading")
+    }
+}
+
+// MARK: - Text Inputs
 
 struct AppTextField: View {
     let placeholder: String
     @Binding var text: String
     var leadingSystemImage: String? = nil
     var trailingSystemImage: String? = nil
-    
-    private let cornerRadius: CGFloat = 26
-    
+
     @Environment(\.colorScheme) var colorScheme
     var body: some View {
-        HStack(spacing: AppSpacing.md) {
+        HStack(spacing: AppSpacing.sm) {
             if let leadingSystemImage {
-                Image(systemName: leadingSystemImage)
+                AppImage(name: leadingSystemImage)
                     .foregroundStyle(.secondary)
             }
-            
+
             TextField(placeholder, text: $text)
                 .font(AppFont.subtitle())
                 .autocorrectionDisabled(true)
                 .foregroundStyle(.primary)
-            
+
             if let trailingSystemImage {
-                Image(systemName: trailingSystemImage)
+                AppImage(name: trailingSystemImage)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, AppSpacing.lg)
-        .padding(.vertical, 14)
+        .padding(.horizontal, AppSpacing.md)
+        .padding(.vertical, 12)
         .background(Color.surfaceColor)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .shadow(color: colorScheme == .dark ? Color(.sRGBLinear, white: 1, opacity: 0.08) : Color(.sRGBLinear, white: 0, opacity: 0.12), radius: 18, x: 0, y: 8)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                .strokeBorder(Color.separatorColor.opacity(0.45), lineWidth: 1)
+        )
         #if os(macOS)
         .textFieldStyle(.plain)
         #endif
@@ -271,7 +479,6 @@ struct AppSecureField: View {
 
     @State var isRevealed: Bool = false
 
-    private let cornerRadius: CGFloat = 26
 #if os(Android)
     let secureIconOn = "visibility"
     let secureIconOff = "visibility_off"
@@ -282,9 +489,9 @@ struct AppSecureField: View {
 
     @Environment(\.colorScheme) var colorScheme
     var body: some View {
-        HStack(spacing: AppSpacing.md) {
+        HStack(spacing: AppSpacing.sm) {
             if let leadingSystemImage {
-                Image(systemName: leadingSystemImage)
+                AppImage(name: leadingSystemImage)
                     .foregroundStyle(.secondary)
             }
 
@@ -304,44 +511,47 @@ struct AppSecureField: View {
 
             if showsRevealToggle {
                 Button(action: { isRevealed.toggle() }) {
-                    Image(systemName: isRevealed ? secureIconOff : secureIconOn)
+                    AppImage(name: isRevealed ? secureIconOff : secureIconOn)
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
             } else if let trailingSystemImage {
-                Image(systemName: trailingSystemImage)
+                AppImage(name: trailingSystemImage)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, AppSpacing.lg)
-        .padding(.vertical, 14)
+        .padding(.horizontal, AppSpacing.md)
+        .padding(.vertical, 12)
         .background(Color.surfaceColor)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .shadow(color: colorScheme == .dark ? Color(.sRGBLinear, white: 1, opacity: 0.08) : Color(.sRGBLinear, white: 0, opacity: 0.12), radius: 18, x: 0, y: 8)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                .strokeBorder(Color.separatorColor.opacity(0.45), lineWidth: 1)
+        )
         #if os(macOS)
         .textFieldStyle(.plain)
         #endif
     }
 }
 
-
-extension View {
-    
-    func captureWidth(in binding: Binding<CGFloat>) -> some View {
-        background(
-            GeometryReader { proxy in
-                Color.clear.preference(key: WidthPreferenceKey.self, value: proxy.size.width)
-            }
-        )
-        .onPreferenceChange(WidthPreferenceKey.self) { binding.wrappedValue = $0 }
-    }
-    
-}
+// MARK: - Safe Geometry Helpers
 
 @MainActor
 private struct WidthPreferenceKey: @preconcurrency PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+extension View {
+    func captureWidth(in binding: Binding<CGFloat>) -> some View {
+        background(
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: WidthPreferenceKey.self, value: proxy.size.width)
+            }
+        )
+        .onPreferenceChange(WidthPreferenceKey.self) { binding.wrappedValue = $0 }
     }
 }

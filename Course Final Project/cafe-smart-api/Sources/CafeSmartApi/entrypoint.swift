@@ -23,9 +23,11 @@ enum Entrypoint {
             try await app.execute()
         } catch {
             app.logger.report(error: error)
+            await app.realtimeHub.stop()
             try? await app.asyncShutdown()
             throw error
         }
+        await app.realtimeHub.stop()
         try await app.asyncShutdown()
     }
 }

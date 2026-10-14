@@ -12,7 +12,6 @@
 //
 //  This file is part of the CafeSmartAPI Project
 
-@preconcurrency import BSON
 import JWT
 import Vapor
 
@@ -23,14 +22,8 @@ import Vapor
 /// admin privileges before allowing access to protected endpoints.
 struct AdminMiddleware: AsyncMiddleware {
 
-  /// Reads the ADMIN_USERNAMES env var at request time to avoid stale caching in tests/process lifetime.
-  private func currentAdminUsernames() -> Set<String> {
-    let adminList = Environment.get("ADMIN_USERNAMES") ?? ""
-    return Set(adminList.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
-  }
-
   func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
-    // Already marked as admin upstream
+    // Already marked as admin upstream (DB flag or ADMIN_USERNAMES).
     if request.storage.get(IsAdminKey.self) == true {
       return try await next.respond(to: request)
     }
@@ -41,8 +34,8 @@ struct AdminMiddleware: AsyncMiddleware {
         status: .custom(code: 996, reasonPhrase: "Admin Check Failed - User Not Found"))
     }
 
-    // Check against environment-driven admin list
-    if currentAdminUsernames().contains(user.email) {
+    // Re-check env list at request time (getenv; survives setenv in tests).
+    if AdminEnv.isListedAdmin(email: user.email) {
       await request.storage.setWithAsyncShutdown(IsAdminKey.self, to: true)
       return try await next.respond(to: request)
     } else {

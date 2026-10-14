@@ -42,25 +42,4 @@ extension Application {
     }
     
     
-    struct RealtimeKey: StorageKey {
-        typealias Value = RealtimeHub
-    }
-    
-    var realtimeHub: RealtimeHub {
-        get {
-            if let hub = self.storage[RealtimeKey.self] {
-                return hub
-            } else {
-                let hub = RealtimeHub()
-                self.storage[RealtimeKey.self] = hub
-                return hub
-            }
-        }
-        set {
-            self.storage[RealtimeKey.self] = newValue
-        }
-    }
-    
 }
-
-extension SymmetricKey: @retroactive @unchecked Sendable {}

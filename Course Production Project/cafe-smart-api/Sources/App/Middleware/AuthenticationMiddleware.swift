@@ -12,80 +12,38 @@
 //
 //  This file is part of the CafeSmartAPI Project
 
-@preconcurrency import BSON
 import JWT
 import Vapor
 
 /// Middleware for authenticating API requests in the NeedleTail system.
 ///
-/// This middleware validates JWT tokens and user credentials for REST API
-/// requests. It extracts user information from request headers, verifies
-/// the JWT token using the user's device HMAC key, and stores authenticated
-/// user data in the request storage for use by subsequent handlers.
-///
-/// ## Authentication Flow
-/// 1. Extract nickname and token from request headers
-/// 2. Look up user in database using username
-/// 3. Verify device exists in user's verified devices
-/// 4. Verify JWT token using device's HMAC key
-/// 5. Check token expiration
-/// 6. Store authenticated user data in request storage
-///
-/// ## Required Headers
-/// - `x-nickname`: User's nickname with device ID
-/// - `x-token`: JWT token for authentication
-///
-/// ## Custom Error Codes
-/// - `997`: API Info Missing (missing required headers)
-/// - `998`: User Not Found For Request (user not in database)
-/// - `999`: User Device Not Found Denied Access (device not verified)
-///
-/// ## Usage
-/// ```swift
-/// // Apply to routes that require authentication
-/// app.group("api") { api in
-///     api.group(AuthenticationMiddleware()) { protected in
-///         protected.get("user", "profile") { req in
-///             // Access authenticated user data
-///             let user = try req.auth.require(User.self)
-///             return user
-///         }
-///     }
-/// }
-/// ```
+/// Validates `Authorization: Bearer <JWT>` (MLDSA87) and attaches the user to request storage.
 struct AuthenticationMiddleware: AsyncMiddleware {
 
-  /**
-   * Processes the request and authenticates the user.
-   *
-   * This method extracts authentication information from request headers,
-   * validates the user and device, verifies the JWT token, and stores
-   * the authenticated user data for use by subsequent handlers.
-   *
-   * - Parameters:
-   *   - request: The incoming HTTP request
-   *   - next: The next responder in the middleware chain
-   * - Returns: The response from the next handler or an error response
-   * - Throws: Various errors during authentication process
-   */
   func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
-    // Expect Authorization: Bearer <token>
     guard let authHeader = request.headers.bearerAuthorization else {
       return Response(status: .unauthorized)
     }
+
+    let user: User
     do {
       let verified = try await request.jwt.verify(authHeader.token, as: UserJWT.self)
-      // Load user
-      guard let user = try await request.store.findUser(byId: verified.subject.value) else {
+      guard let found = try await request.store.findUser(byId: verified.subject.value) else {
         return Response(status: .unauthorized)
       }
-      // Store minimal context
-      await request.storage.setWithAsyncShutdown(UserKey.self, to: user)
-        await request.storage.setWithAsyncShutdown(IsAdminKey.self, to: user.isAdmin)
-      return try await next.respond(to: request)
+      user = found
     } catch {
-      throw error
+      // Invalid/expired tokens must not surface as 500s.
+      // Do not wrap `next.respond` — controller Aborts must propagate.
+      return Response(status: .unauthorized)
     }
+
+    let isAdmin = AdminEnv.isAdmin(user: user)
+    let venueRole = RoleGate.venueRole(for: user, requestIsAdmin: isAdmin)
+    await request.storage.setWithAsyncShutdown(UserKey.self, to: user)
+    await request.storage.setWithAsyncShutdown(IsAdminKey.self, to: isAdmin)
+    await request.storage.setWithAsyncShutdown(VenueRoleKey.self, to: venueRole)
+    return try await next.respond(to: request)
   }
 }
 

@@ -53,13 +53,43 @@ actor MLService {
     }
     
     
-    func startTraining() async {
-        do {
+    enum TrainingLocation: String, Sendable {
+        case local
+        case server
+    }
+
+    /// Entry point from the Mac UI. Server training must not download CSV first —
+    /// the API builds its own training set. Local training still exports CSV for Create ML.
+    /// - Returns: A short success message for in-app banners, or throws on failure.
+    @discardableResult
+    static func train(location: TrainingLocation) async throws -> String {
+        switch location {
+        case .server:
+            logger.info("Starting server training (Python → ONNX)…")
+            let job = try await AIService.shared.startServerTraining(kind: "restockDaily")
+            logger.info("Server training finished: status=\(job.status) artifactId=\(job.artifactId ?? "-")")
+            return "Server training succeeded (\(job.artifactId ?? job.id))"
+        case .local:
+            logger.info("Starting local training (Create ML → CoreML)…")
+            let service = try await MLService()
+            try await service.startTraining(location: .local)
+            return "Local CoreML training uploaded"
+        }
+    }
+
+    func startTraining(location: TrainingLocation = .local) async throws {
+        switch location {
+        case .local:
             let modelName = "restockDaily"
             let modelFileURL = try await self.createModelFile(withCSVAt: fileURL, modelName: modelName)
+            defer {
+                try? FileManager.default.removeItem(at: modelFileURL)
+                try? FileManager.default.removeItem(at: fileURL)
+            }
             try await AIService.shared.uploadMLModel(from: modelFileURL, name: modelName, runtime: "coreml", kind: "restockDaily")
-        } catch {
-            //log
+            logger.info("Local training uploaded CoreML model \(modelName)")
+        case .server:
+            _ = try await AIService.shared.startServerTraining(kind: "restockDaily")
         }
     }
     
@@ -80,11 +110,19 @@ actor MLService {
         // Server provides year/month/day/weekday so dropping date/is_weekend is fine
         let featureColumns = Array(headerCols.dropLast()).filter { !["date", "datetime", "is_weekend"].contains($0) }
         
-        // Choose task type based on target column values
-        let isNumericTarget = try csvTargetLooksNumeric(csvURL)
+        // Restock CSV always targets numeric usage. Prefer column name so an empty
+        // export is not misclassified as a classification task.
+        let isNumericTarget = target == "target_usage"
+            ? true
+            : try csvTargetLooksNumeric(csvURL)
         let stats = try self.csvTargetStats(csvURL)
         logger.info("MLService: dataset=\(modelName) target=\(target) task=\(isNumericTarget ? "regression" : "classification") rows=\(stats.rowCount)")
-        
+
+        if stats.rowCount == 0 {
+            throw Errors.insufficientData(
+                "Export CSV has no data rows. Restart the API (export now falls back to a stub set) or seed orders/recipes in Mongo."
+            )
+        }
         if !isNumericTarget {
             if stats.rowCount < 10 {
                 logger.warning("Warning: training classification with very small dataset (\(stats.rowCount) rows). Results may be poor.")
@@ -92,10 +130,8 @@ actor MLService {
             if stats.labels.count < 2 {
                 throw Errors.insufficientData("Classification requires at least two classes; found \(stats.labels.count).")
             }
-        } else {
-            if stats.rowCount < 2 {
-                throw Errors.insufficientData("Regression requires at least 2 rows; found \(stats.rowCount).")
-            }
+        } else if stats.rowCount < 2 {
+            throw Errors.insufficientData("Regression requires at least 2 rows; found \(stats.rowCount).")
         }
         
         let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(modelName).mlmodel")

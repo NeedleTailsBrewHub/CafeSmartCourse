@@ -25,8 +25,9 @@ public enum PredictorKind: String, Codable, Sendable, CaseIterable, Equatable {
 	case reservationDuration
 }
 
-public struct MLModelArtifact: Content, Sendable, Equatable, BSONResponseEncodable {
-	public var _id: ObjectId
+public struct MLModelArtifact: Content, Sendable, Equatable, BinaryResponseEncodable {
+	/// Stable string id (hex ObjectId). Prefer `String` on the wire over BSON ObjectId.
+	public var _id: String
 	public var id: String
 	public var filename: String
 	public var runtime: PredictRuntime
@@ -35,22 +36,22 @@ public struct MLModelArtifact: Content, Sendable, Equatable, BSONResponseEncodab
 	public var bytes: Int
 	public var active: Bool
 	public var uploadedAt: Date
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 
-public struct MLModelsWrapper: Content, Sendable, Equatable, BSONResponseEncodable {
+/// Wire name matches client `ModelsList` for BinaryCodable type headers.
+public struct ModelsList: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var items: [MLModelArtifact]
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
+
+@available(*, deprecated, renamed: "ModelsList")
+public typealias MLModelsWrapper = ModelsList
 
 

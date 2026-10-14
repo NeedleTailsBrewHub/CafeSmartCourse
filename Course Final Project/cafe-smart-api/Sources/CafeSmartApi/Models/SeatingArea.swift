@@ -13,17 +13,14 @@
 //  This file is part of the CafeSmartAPI Project
 
 import Vapor
-import BSON
 
-public struct SeatingArea: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct SeatingArea: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var id: String
     public var name: String
     public var defaultTurnMinutes: Int
     public var active: Bool
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }

@@ -13,7 +13,6 @@
 //  This file is part of the CafeSmartAPI Project
 
 import Vapor
-import BSON
 
 public struct BusinessHours: Codable, Sendable, Equatable {
     public var weekday: Int
@@ -27,17 +26,15 @@ public struct StaffingRules: Codable, Sendable, Equatable {
     public var guestsPerHostPerHour: Int
 }
 
-public struct BusinessConfig: Content, Sendable, Equatable, AsyncResponseEncodable {
+public struct BusinessConfig: Content, Sendable, Equatable, BinaryResponseEncodable {
     public var id: String
     public var timezone: String
     public var hours: [BusinessHours]
     public var seatingCapacity: Int
     public var staffing: StaffingRules
+
     public func encodeResponse(for request: Request) async throws -> Response {
-        var headers = HTTPHeaders()
-        headers.add(name: .contentType, value: "application/bson")
-        let body = try BSONEncoder().encode(self)
-        return .init(status: .ok, headers: headers, body: .init(buffer: body.makeByteBuffer()))
+        try binaryEncodedResponse()
     }
 }
 

@@ -1,29 +1,35 @@
-# Docker Compose file for Vapor
+# Docker Compose for CafeSmart API (production-like TLS).
 #
-# Install Docker on your system to run and test
-# your Vapor app in a production-like environment.
-#
-# Note: This file is intended for testing and does not
-# implement best practices for a production deployment.
+#   ./scripts/gen-dev-certs.sh   # once, for local self-signed PEMs
+#   docker compose build
+#   docker compose up app
 #
 # Learn more: https://docs.docker.com/compose/reference/
-#
-#   Build images: docker compose build
-#      Start app: docker compose up app
-#       Stop all: docker compose down
-#
 
 x-shared_environment: &shared_environment
-  LOG_LEVEL: ${LOG_LEVEL:-debug}
-  
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  MONGO_URL: ${MONGO_URL:-mongodb://host.docker.internal:27017/cafesmart}
+  MLDSA_SEED: ${MLDSA_SEED:?set MLDSA_SEED}
+  ADMIN_USERNAMES: ${ADMIN_USERNAMES:-admin@example.com}
+  CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-https://localhost}
+  USE_TEST_STORE: ${USE_TEST_STORE:-false}
+  SEED_TEST_DATA: "false"
+  HTTP_PORT: "8080"
+  WS_HOST: "0.0.0.0"
+  WS_PORT: "8081"
+  API_LOCAL_FULL_CHAIN: /certs/fullchain.pem
+  API_LOCAL_PRIV_KEY: /certs/privkey.pem
+
 services:
   app:
-    image: :latest
+    image: cafesmart-api:latest
     build:
       context: .
     environment:
       <<: *shared_environment
     ports:
-      - '8080:8080'
-    # user: '0' # uncomment to run as root for testing purposes even though Dockerfile defines 'vapor' user.
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      - ${CERTS_DIR:-./certs}:/certs:ro
     command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]

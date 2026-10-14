@@ -95,4 +95,10 @@ public protocol MongoStore: Sendable {
     func findModelArtifact(by id: String) async throws -> MLModelArtifact?
     func setActiveModel(id: String) async throws
     func deleteModelArtifact(id: String) async throws
+
+    // ML train jobs (durable audit)
+    func upsertTrainJob(_ job: TrainJob) async throws
+    func findTrainJob(by id: String) async throws -> TrainJob?
+    func listTrainJobs(limit: Int) async throws -> [TrainJob]
+    func pruneTrainJobs(keepLast: Int, maxAgeDays: Int) async throws
 }
